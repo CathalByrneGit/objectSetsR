@@ -1,0 +1,59 @@
+---
+title: "Working with Object Sets"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Working with Object Sets}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+# Overview
+
+`objectSetsR` provides a lazy query algebra for ontology-aware datasets. You
+define your ontology in `ontologySpecR`, connect to a DBI backend (such as
+DuckDB), and compose `ObjectSet` operations without immediately executing
+queries.
+
+# Aviation demo example
+
+```{r aviation-demo, eval=FALSE}
+library(ontologySpecR)
+library(objectSetsR)
+library(DBI)
+library(duckdb)
+
+# Load the aviation ontology bundle from ontologySpecR
+b <- read_bundle(system.file("examples", "aviation-demo.json",
+                              package = "ontologySpecR"))
+
+# Create a DuckDB context with sample data
+con <- DBI::dbConnect(duckdb::duckdb())
+
+# ...insert sample airport/airline/route data here...
+
+ctx <- ontology_context(b, con)
+
+# Find all non-stop routes and get their origin airports
+origin_airports <- object_set(ctx, "FlightRoute") |>
+  os_filter(stops == 0L) |>
+  os_traverse("RouteOrigin") |>
+  os_collect()
+
+# Count airports per country
+airport_counts <- object_set(ctx, "Airport") |>
+  os_aggregate(country, .fns = list(n = dplyr::n())) |>
+  os_collect()
+
+# Show the SQL without executing it
+object_set(ctx, "FlightRoute") |>
+  os_traverse("RouteOrigin") |>
+  os_filter(country == "Ireland") |>
+  os_show_query()
+```
