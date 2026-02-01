@@ -1,8 +1,5 @@
 bundle_as_list <- function(bundle) {
-  if (is.list(bundle) && !is.null(bundle$objectTypes)) {
-    return(bundle)
-  }
-  if (inherits(bundle, "bundle")) {
+  if (inherits(bundle, "ontology_bundle")) {
     return(ontologySpecR::as_list(bundle))
   }
   if (is.list(bundle)) {
@@ -16,7 +13,8 @@ index_by_id <- function(items) {
 }
 
 get_object_types <- function(bundle_list) {
-  obj_types <- bundle_list$objectTypes %||% bundle_list$object_types
+  obj_types <- bundle_list$objects %||% bundle_list$objectTypes %||%
+    bundle_list$object_types
   if (is.null(obj_types)) {
     rlang::abort("Bundle is missing object types.")
   }
@@ -24,7 +22,8 @@ get_object_types <- function(bundle_list) {
 }
 
 get_link_types <- function(bundle_list) {
-  link_types <- bundle_list$linkTypes %||% bundle_list$link_types
+  link_types <- bundle_list$links %||% bundle_list$linkTypes %||%
+    bundle_list$link_types
   if (is.null(link_types)) {
     rlang::abort("Bundle is missing link types.")
   }
@@ -60,7 +59,12 @@ object_primary_key <- function(object_type) {
   if (is.null(pk)) {
     rlang::abort(paste0("Object type ", object_type$id, " has no primary key."))
   }
-  pk
+  # ontologySpecR produces list(properties = list("col"), strategy = "natural")
+  if (is.list(pk) && !is.null(pk$properties)) {
+    return(as.character(pk$properties))
+  }
+  # plain string or character vector
+  as.character(pk)
 }
 
 object_source_table <- function(object_type) {
@@ -207,4 +211,26 @@ ontology_context <- function(bundle, connection) {
   )
   class(ctx) <- "OntologyContext"
   context_validate_tables(ctx)
+}
+
+#' @export
+print.OntologyContext <- function(x, ...) {
+  n_obj <- length(x$object_types)
+  n_link <- length(x$link_types)
+  con_class <- class(x$connection)[[1]]
+  cat(sprintf("<OntologyContext> %d object type%s, %d link type%s (%s)\n",
+              n_obj, if (n_obj == 1) "" else "s",
+              n_link, if (n_link == 1) "" else "s",
+              con_class))
+  invisible(x)
+}
+
+#' @export
+print.ObjectSet <- function(x, ...) {
+  n_props <- length(x$properties)
+  cat(sprintf("<ObjectSet> %s (%d propert%s) [lazy]\n",
+              x$object_type_id,
+              n_props,
+              if (n_props == 1) "y" else "ies"))
+  invisible(x)
 }
