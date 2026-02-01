@@ -1,0 +1,115 @@
+---
+title: "Working with Object Sets"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Working with Object Sets}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = requireNamespace("duckdb", quietly = TRUE) &&
+    requireNamespace("ontologySpecR", quietly = TRUE)
+)
+```
+
+# Overview
+
+`objectSetsR` provides a lazy query algebra for ontology-aware datasets. You
+define your ontology in `ontologySpecR`, connect to a DBI backend (such as
+DuckDB), and compose `ObjectSet` operations without immediately executing
+queries.
+
+# Aviation demo example
+
+```{r aviation-demo}
+library(ontologySpecR)
+library(objectSetsR)
+library(DBI)
+library(duckdb)
+
+# Load the aviation ontology bundle from ontologySpecR
+b <- read_bundle(system.file("examples", "aviation-demo.json",
+                             package = "ontologySpecR"))
+
+# Create a DuckDB context with sample data
+con <- DBI::dbConnect(duckdb::duckdb())
+on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+bundle_list <- ontologySpecR::as_list(b)
+objects <- bundle_list$objects
+links <- bundle_list$links
+
+make_sample_values <- function(type, n) {
+  switch(
+    type,
+    string = paste0("value_", seq_len(n)),
+    integer = seq_len(n),
+    number = as.numeric(seq_len(n)),
+    boolean = rep(c(TRUE, FALSE), length.out = n),
+    date = as.Date("2020-01-01") + seq_len(n) - 1,
+    datetime = as.POSIXct("2020-01-01", tz = "UTC") + seq_len(n) * 3600,
+    json = rep("{}", n),
+    rep(NA, n)
+  )
+}
+
+data_by_object <- list()
+for (obj in objects) {
+  props <- obj$properties
+  n <- 2
+  df <- data.frame(stringsAsFactors = FALSE)
+  for (prop in props) {
+    df[[prop$id]] <- make_sample_values(prop$type, n)
+  }
+  pk <- obj$primaryKey
+  pk_props <- if (is.list(pk) && !is.null(pk$properties)) pk$properties else pk
+  for (pk_prop in pk_props) {
+    df[[pk_prop]] <- paste0(obj$id, "_", seq_len(n))
+  }
+  data_by_object[[obj$id]] <- df
+}
+
+for (link in links) {
+  join <- link$join
+  from_keys <- join$fromKeys
+  to_keys <- join$toKeys
+  from_df <- data_by_object[[link$from]]
+  to_df <- data_by_object[[link$to]]
+  if (length(from_keys) == length(to_keys)) {
+    for (i in seq_along(from_keys)) {
+      from_df[[from_keys[[i]]]] <- to_df[[to_keys[[i]]]]
+    }
+  }
+  data_by_object[[link$from]] <- from_df
+}
+
+for (obj in objects) {
+  table <- obj$source$table
+  schema <- obj$source$schema
+  table_id <- if (!is.null(schema)) DBI::Id(schema = schema, table = table) else table
+  DBI::dbWriteTable(con, table_id, data_by_object[[obj$id]], overwrite = TRUE)
+}
+
+ctx <- ontology_context(b, con)
+
+# Find all non-stop routes and get their origin airports
+origin_airports <- object_set(ctx, "FlightRoute") |>
+  os_filter(stops == 0L) |>
+  os_traverse("RouteOrigin") |>
+  os_collect()
+
+# Count airports per country
+airport_counts <- object_set(ctx, "Airport") |>
+  os_aggregate(country, .fns = list(n = dplyr::n())) |>
+  os_collect()
+
+# Show the SQL without executing it
+object_set(ctx, "FlightRoute") |>
+  os_traverse("RouteOrigin") |>
+  os_filter(country == "Ireland") |>
+  os_show_query()
+```

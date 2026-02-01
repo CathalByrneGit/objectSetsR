@@ -1,0 +1,7 @@
+^\.Rproj\.user$
+^\.git$
+^\.github$
+^README\.Rmd$
+^_pkgdown\.yml$
+^pkgdown$
+^\.DS_Store$
