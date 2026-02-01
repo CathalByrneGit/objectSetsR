@@ -169,6 +169,28 @@ test_that("bundle with plain string primaryKey still works", {
   expect_equal(nrow(result), 2)
 })
 
+test_that("os_distinct removes duplicate rows", {
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  ctx <- ontology_context(make_bundle(), con)
+  # Traversal can produce duplicates when multiple routes share an origin
+  origins <- object_set(ctx, "FlightRoute") |>
+    os_traverse("RouteOrigin") |>
+    os_distinct() |>
+    os_collect()
+  expect_equal(nrow(origins), length(unique(origins$airport_id)))
+})
+
+test_that("os_arrange sorts results", {
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  ctx <- ontology_context(make_bundle(), con)
+  sorted <- object_set(ctx, "Airport") |>
+    os_arrange(name) |>
+    os_collect()
+  expect_equal(sorted$name, sort(sorted$name))
+})
+
 test_that("reverse traversal selects correct columns on name collision", {
   con <- setup_duckdb()
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
@@ -184,4 +206,62 @@ test_that("reverse traversal selects correct columns on name collision", {
   expect_true("stops" %in% names(around))
   # Should NOT have Airport-only properties
   expect_false("country" %in% names(around))
+})
+
+test_that("ontologySpecR bundle objects work end-to-end", {
+  skip_if_not_installed("ontologySpecR")
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+  airport <- ontologySpecR::object_type(
+    id = "Airport",
+    primary_key = ontologySpecR::primary_key_def(properties = "airport_id"),
+    properties = list(
+      ontologySpecR::property_def(id = "airport_id", type = "string"),
+      ontologySpecR::property_def(id = "country", type = "string"),
+      ontologySpecR::property_def(id = "name", type = "string")
+    ),
+    source = ontologySpecR::source_binding(table = "airports")
+  )
+
+  route <- ontologySpecR::object_type(
+    id = "FlightRoute",
+    primary_key = ontologySpecR::primary_key_def(properties = "route_id"),
+    properties = list(
+      ontologySpecR::property_def(id = "route_id", type = "string"),
+      ontologySpecR::property_def(id = "origin_id", type = "string"),
+      ontologySpecR::property_def(id = "destination_id", type = "string"),
+      ontologySpecR::property_def(id = "stops", type = "integer")
+    ),
+    source = ontologySpecR::source_binding(table = "routes")
+  )
+
+  link <- ontologySpecR::link_type(
+    id = "RouteOrigin",
+    from = "FlightRoute",
+    to = "Airport",
+    join = ontologySpecR::join_def(
+      from_keys = "origin_id",
+      to_keys = "airport_id"
+    )
+  )
+
+  b <- ontologySpecR::bundle(
+    spec_version = "1.0.0",
+    bundle_id = "test",
+    objects = list(airport, route),
+    links = list(link)
+  )
+
+  ctx <- ontology_context(b, con)
+  result <- object_set(ctx, "FlightRoute") |>
+    os_filter(stops == 0L) |>
+    os_collect()
+  expect_equal(nrow(result), 1)
+  expect_equal(result$route_id, "R1")
+
+  origins <- object_set(ctx, "FlightRoute") |>
+    os_traverse("RouteOrigin") |>
+    os_collect()
+  expect_true("airport_id" %in% names(origins))
 })

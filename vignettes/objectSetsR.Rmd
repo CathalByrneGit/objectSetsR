@@ -23,37 +23,154 @@ queries.
 
 # Aviation demo example
 
-```{r aviation-demo, eval=FALSE}
-library(ontologySpecR)
+We start by defining a small bundle that describes airports and flight routes,
+then load sample data into an in-memory DuckDB database.
+
+```{r create-context}
 library(objectSetsR)
 library(DBI)
 library(duckdb)
 
-# Load the aviation ontology bundle from ontologySpecR
-b <- read_bundle(system.file("examples", "aviation-demo.json",
-                              package = "ontologySpecR"))
+bundle <- list(
+  objects = list(
+    list(
+      id = "Airport",
+      primaryKey = "airport_id",
+      source = list(table = "airports"),
+      properties = list(
+        list(id = "airport_id", type = "string"),
+        list(id = "country", type = "string"),
+        list(id = "name", type = "string")
+      )
+    ),
+    list(
+      id = "FlightRoute",
+      primaryKey = "route_id",
+      source = list(table = "routes"),
+      properties = list(
+        list(id = "route_id", type = "string"),
+        list(id = "origin_id", type = "string"),
+        list(id = "destination_id", type = "string"),
+        list(id = "stops", type = "integer")
+      )
+    )
+  ),
+  links = list(
+    list(
+      id = "RouteOrigin",
+      from = "FlightRoute",
+      to = "Airport",
+      join = list(fromKeys = "origin_id", toKeys = "airport_id")
+    ),
+    list(
+      id = "RouteDestination",
+      from = "FlightRoute",
+      to = "Airport",
+      join = list(fromKeys = "destination_id", toKeys = "airport_id")
+    )
+  )
+)
 
-# Create a DuckDB context with sample data
 con <- DBI::dbConnect(duckdb::duckdb())
 
-# ...insert sample airport/airline/route data here...
+DBI::dbWriteTable(con, "airports", data.frame(
+  airport_id = c("DUB", "JFK", "LHR"),
+  country    = c("Ireland", "USA", "UK"),
+  name       = c("Dublin", "John F Kennedy", "Heathrow"),
+  stringsAsFactors = FALSE
+))
 
-ctx <- ontology_context(b, con)
+DBI::dbWriteTable(con, "routes", data.frame(
+  route_id       = c("R1", "R2", "R3", "R4"),
+  origin_id      = c("DUB", "JFK", "LHR", "DUB"),
+  destination_id = c("JFK", "DUB", "JFK", "LHR"),
+  stops          = c(0L, 1L, 0L, 0L),
+  stringsAsFactors = FALSE
+))
 
-# Find all non-stop routes and get their origin airports
-origin_airports <- object_set(ctx, "FlightRoute") |>
+ctx <- ontology_context(bundle, con)
+ctx
+```
+
+# Filtering and collecting
+
+`os_filter()` adds a lazy predicate. Nothing is executed until `os_collect()`.
+
+```{r filter}
+nonstop <- object_set(ctx, "FlightRoute") |>
+  os_filter(stops == 0L)
+
+os_collect(nonstop)
+```
+
+# Selecting properties
+
+```{r select}
+object_set(ctx, "Airport") |>
+  os_select(airport_id, name) |>
+  os_collect()
+```
+
+# Traversing links
+
+`os_traverse()` follows a link to the target object type.
+
+```{r traverse}
+origins <- object_set(ctx, "FlightRoute") |>
   os_filter(stops == 0L) |>
   os_traverse("RouteOrigin") |>
   os_collect()
+origins
+```
 
-# Count airports per country
-airport_counts <- object_set(ctx, "Airport") |>
-  os_aggregate(country, .fns = list(n = dplyr::n())) |>
+`os_search_around()` traverses in reverse.
+
+```{r search-around}
+routes_from_dublin <- object_set(ctx, "Airport") |>
+  os_filter(airport_id == "DUB") |>
+  os_search_around("RouteOrigin") |>
   os_collect()
+routes_from_dublin
+```
 
-# Show the SQL without executing it
+# Set algebra
+
+```{r set-algebra}
+routes <- object_set(ctx, "FlightRoute")
+from_dub <- routes |> os_filter(origin_id == "DUB")
+nonstop  <- routes |> os_filter(stops == 0L)
+
+os_union(from_dub, nonstop) |> os_collect()
+os_intersect(from_dub, nonstop) |> os_collect()
+```
+
+# Aggregation
+
+```{r aggregate}
+object_set(ctx, "FlightRoute") |>
+  os_aggregate(origin_id, .fns = list(n = dplyr::n())) |>
+  os_collect()
+```
+
+# Deduplication and sorting
+
+```{r distinct-arrange}
 object_set(ctx, "FlightRoute") |>
   os_traverse("RouteOrigin") |>
-  os_filter(country == "Ireland") |>
+  os_distinct() |>
+  os_arrange(name) |>
+  os_collect()
+```
+
+# Viewing the generated SQL
+
+```{r show-query}
+object_set(ctx, "FlightRoute") |>
+  os_filter(stops == 0L) |>
+  os_traverse("RouteOrigin") |>
   os_show_query()
+```
+
+```{r cleanup, include=FALSE}
+DBI::dbDisconnect(con, shutdown = TRUE)
 ```

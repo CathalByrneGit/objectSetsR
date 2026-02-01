@@ -121,6 +121,31 @@ os_search_around <- function(os, link_type_id) {
   os_new(os$ctx, source_type$id, tbl, source_props)
 }
 
+#' Remove duplicate rows from an object set
+#'
+#' @param os An \code{ObjectSet}.
+#'
+#' @return An \code{ObjectSet} with distinct rows.
+#' @export
+os_distinct <- function(os) {
+  ensure_object_set(os)
+  tbl <- dplyr::distinct(os$tbl)
+  os_new(os$ctx, os$object_type_id, tbl, os$properties)
+}
+
+#' Sort an object set
+#'
+#' @param os An \code{ObjectSet}.
+#' @param ... Column expressions passed to \code{dplyr::arrange()}.
+#'
+#' @return An \code{ObjectSet}.
+#' @export
+os_arrange <- function(os, ...) {
+  ensure_object_set(os)
+  tbl <- dplyr::arrange(os$tbl, ...)
+  os_new(os$ctx, os$object_type_id, tbl, os$properties)
+}
+
 #' Union two object sets
 #'
 #' @param os1 An \code{ObjectSet}.
