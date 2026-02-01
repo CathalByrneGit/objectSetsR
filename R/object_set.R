@@ -27,7 +27,7 @@ os_filter <- function(os, ...) {
   quos <- rlang::enquos(...)
   object_type <- get_object_type(os$ctx, os$object_type_id)
   validate_filter_exprs(object_type, quos)
-  tbl <- dplyr::filter(os$tbl, !!!quos)
+  tbl <- rlang::inject(dplyr::filter(os$tbl, !!!quos))
   os_new(os$ctx, os$object_type_id, tbl, os$properties)
 }
 
@@ -52,7 +52,7 @@ os_select <- function(os, ...) {
   if (length(symbols) > 0) {
     validate_property_ids(object_type, symbols)
   }
-  tbl <- dplyr::select(os$tbl, !!!quos)
+  tbl <- rlang::inject(dplyr::select(os$tbl, !!!quos))
   props <- dplyr::tbl_vars(tbl)
   os_new(os$ctx, os$object_type_id, tbl, props)
 }
@@ -213,8 +213,8 @@ os_aggregate <- function(os, ..., .fns) {
     rlang::abort("`.fns` must be a named list of summary expressions.")
   }
   validate_summary_exprs(object_type, fns)
-  tbl <- dplyr::group_by(os$tbl, !!!group_quos)
-  tbl <- dplyr::summarise(tbl, !!!fns, .groups = "drop")
+  tbl <- rlang::inject(dplyr::group_by(os$tbl, !!!group_quos))
+  tbl <- rlang::inject(dplyr::summarise(tbl, !!!fns, .groups = "drop"))
   os_new(os$ctx, os$object_type_id, tbl, dplyr::tbl_vars(tbl))
 }
 

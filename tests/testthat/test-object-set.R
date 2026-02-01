@@ -221,6 +221,7 @@ test_that("ontologySpecR bundle objects work end-to-end", {
       ontologySpecR::property_def(id = "country", type = "string"),
       ontologySpecR::property_def(id = "name", type = "string")
     ),
+    source_kind = "table",
     source_table = "airports"
   )
 
@@ -233,6 +234,7 @@ test_that("ontologySpecR bundle objects work end-to-end", {
       ontologySpecR::property_def(id = "destination_id", type = "string"),
       ontologySpecR::property_def(id = "stops", type = "integer")
     ),
+    source_kind = "table",
     source_table = "routes"
   )
 
