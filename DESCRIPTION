@@ -1,0 +1,28 @@
+Package: objectSetsR
+Type: Package
+Title: Lazy Ontology-Aware Object Sets
+Version: 0.1.0
+Authors@R: c(
+    person("ObjectSetsR", "Maintainer", email = "maintainer@example.com", role = c("aut", "cre"))
+  )
+Description: Provides a lazy, ontology-aware query algebra for object types and
+  link traversals defined in ontologySpecR bundles. Object sets can be filtered,
+  traversed, aggregated, and materialized against DBI backends such as DuckDB.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports:
+    ontologySpecR,
+    DBI,
+    dplyr,
+    dbplyr,
+    rlang
+Suggests:
+    duckdb,
+    tidygraph,
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown
+Config/testthat/edition: 3
+Roxygen: list(markdown = TRUE)
+VignetteBuilder: knitr
