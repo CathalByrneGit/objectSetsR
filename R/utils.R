@@ -18,11 +18,11 @@ ensure_same_object_type <- function(os1, os2) {
   }
 }
 
-resolve_target_columns <- function(joined_tbl, target_props) {
+resolve_target_columns <- function(joined_tbl, target_props, suffix = ".to") {
   vars <- dplyr::tbl_vars(joined_tbl)
   source_names <- vapply(target_props, function(prop) {
-    if (paste0(prop, ".to") %in% vars) {
-      paste0(prop, ".to")
+    if (paste0(prop, suffix) %in% vars) {
+      paste0(prop, suffix)
     } else if (prop %in% vars) {
       prop
     } else {

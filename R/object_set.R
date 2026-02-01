@@ -40,7 +40,19 @@ os_filter <- function(os, ...) {
 #' @export
 os_select <- function(os, ...) {
   ensure_object_set(os)
-  tbl <- dplyr::select(os$tbl, ...)
+  quos <- rlang::enquos(...)
+  object_type <- get_object_type(os$ctx, os$object_type_id)
+  symbols <- unique(unlist(lapply(quos, function(q) {
+    expr <- rlang::get_expr(q)
+    if (rlang::is_symbol(expr)) {
+      return(rlang::as_string(expr))
+    }
+    character(0)
+  })))
+  if (length(symbols) > 0) {
+    validate_property_ids(object_type, symbols)
+  }
+  tbl <- dplyr::select(os$tbl, !!!quos)
   props <- dplyr::tbl_vars(tbl)
   os_new(os$ctx, os$object_type_id, tbl, props)
 }
@@ -98,7 +110,7 @@ os_search_around <- function(os, link_type_id) {
   by <- stats::setNames(from_keys, to_keys)
   joined <- dplyr::inner_join(os$tbl, source_tbl, by = by, suffix = c(".to", ".from"))
   source_props <- property_ids(source_type)
-  selections <- resolve_target_columns(joined, source_props)
+  selections <- resolve_target_columns(joined, source_props, suffix = ".from")
   tbl <- dplyr::select(joined, !!!selections)
   os_new(os$ctx, source_type$id, tbl, source_props)
 }
@@ -213,7 +225,7 @@ os_to_graph <- function(ctx, object_type_ids, link_type_ids) {
   for (object_type_id in object_type_ids) {
     object_type <- get_object_type(ctx, object_type_id)
     pk <- object_primary_key(object_type)
-    pk_cols <- if (length(pk) > 1) pk else pk[[1]] %||% pk
+    pk_cols <- pk
     tbl <- build_object_tbl(ctx, object_type)
     nodes <- dplyr::select(tbl, dplyr::all_of(pk_cols))
     nodes <- dplyr::collect(nodes)

@@ -4,10 +4,10 @@ library(DBI)
 
 make_bundle <- function() {
   list(
-    objectTypes = list(
+    objects = list(
       list(
         id = "Airport",
-        primaryKey = "airport_id",
+        primaryKey = list(properties = list("airport_id"), strategy = "natural"),
         source = list(table = "airports"),
         properties = list(
           list(id = "airport_id", type = "string"),
@@ -17,7 +17,7 @@ make_bundle <- function() {
       ),
       list(
         id = "FlightRoute",
-        primaryKey = "route_id",
+        primaryKey = list(properties = list("route_id"), strategy = "natural"),
         source = list(table = "routes"),
         properties = list(
           list(id = "route_id", type = "string"),
@@ -27,7 +27,7 @@ make_bundle <- function() {
         )
       )
     ),
-    linkTypes = list(
+    links = list(
       list(
         id = "RouteOrigin",
         from = "FlightRoute",
@@ -125,4 +125,63 @@ test_that("os_show_query renders SQL", {
     os_filter(stops == 0L) |>
     os_show_query()
   expect_true(is.character(query))
+})
+
+test_that("os_select validates property names", {
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  ctx <- ontology_context(make_bundle(), con)
+  os <- object_set(ctx, "Airport")
+  result <- os |> os_select(airport_id, name) |> os_collect()
+  expect_equal(sort(names(result)), c("airport_id", "name"))
+  expect_error(os_select(os, nonexistent), "Unknown property")
+})
+
+test_that("print methods produce output", {
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  ctx <- ontology_context(make_bundle(), con)
+  expect_output(print(ctx), "OntologyContext")
+  os <- object_set(ctx, "Airport")
+  expect_output(print(os), "ObjectSet")
+})
+
+test_that("bundle with plain string primaryKey still works", {
+  bundle <- list(
+    objects = list(
+      list(
+        id = "Airport",
+        primaryKey = "airport_id",
+        source = list(table = "airports"),
+        properties = list(
+          list(id = "airport_id", type = "string"),
+          list(id = "name", type = "string")
+        )
+      )
+    ),
+    links = list()
+  )
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  ctx <- ontology_context(bundle, con)
+  os <- object_set(ctx, "Airport")
+  result <- os_collect(os)
+  expect_equal(nrow(result), 2)
+})
+
+test_that("reverse traversal selects correct columns on name collision", {
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  # Both Airport and FlightRoute have columns; after reverse join,
+  # we should get FlightRoute columns, not Airport columns
+  ctx <- ontology_context(make_bundle(), con)
+  around <- object_set(ctx, "Airport") |>
+    os_search_around("RouteOrigin") |>
+    os_collect()
+  # Should have FlightRoute properties
+  expect_true("route_id" %in% names(around))
+  expect_true("origin_id" %in% names(around))
+  expect_true("stops" %in% names(around))
+  # Should NOT have Airport-only properties
+  expect_false("country" %in% names(around))
 })
