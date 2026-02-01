@@ -112,7 +112,7 @@ test_that("set algebra and aggregation operate on object sets", {
   combined <- os_union(non_stop, with_stop)
   expect_equal(os_count(combined), 2)
   grouped <- routes |>
-    os_aggregate(origin_id, .fns = list(n = dplyr::n()))
+    os_aggregate(origin_id, n = dplyr::n())
   grouped_data <- os_collect(grouped)
   expect_true("n" %in% names(grouped_data))
 })
