@@ -178,7 +178,7 @@ build_object_tbl <- function(ctx, object_type) {
     }
   }
   if (length(exprs) > 0) {
-    base_tbl <- dplyr::mutate(base_tbl, !!!exprs)
+    base_tbl <- do.call(dplyr::mutate, c(list(.data = base_tbl), exprs))
   }
   dplyr::select(base_tbl, dplyr::all_of(prop_ids))
 }

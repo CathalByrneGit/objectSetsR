@@ -24,10 +24,12 @@ object_set <- function(ctx, object_type_id) {
 #' @export
 os_filter <- function(os, ...) {
   ensure_object_set(os)
-  quos <- rlang::enquos(...)
+  dots <- rlang::enquos(...)
   object_type <- get_object_type(os$ctx, os$object_type_id)
-  validate_filter_exprs(object_type, quos)
-  tbl <- rlang::inject(dplyr::filter(os$tbl, !!!quos))
+  validate_filter_exprs(object_type, dots)
+  # Build the filter call manually to avoid !!! stack overflow
+  args <- c(list(.data = os$tbl), dots)
+  tbl <- do.call(dplyr::filter, args)
   os_new(os$ctx, os$object_type_id, tbl, os$properties)
 }
 
@@ -52,7 +54,8 @@ os_select <- function(os, ...) {
   if (length(symbols) > 0) {
     validate_property_ids(object_type, symbols)
   }
-  tbl <- rlang::inject(dplyr::select(os$tbl, !!!quos))
+  args <- c(list(.data = os$tbl), quos)
+  tbl <- do.call(dplyr::select, args)
   props <- dplyr::tbl_vars(tbl)
   os_new(os$ctx, os$object_type_id, tbl, props)
 }
@@ -82,10 +85,10 @@ os_traverse <- function(os, link_type_id) {
   joined <- dplyr::inner_join(os$tbl, target_tbl, by = by, suffix = c(".from", ".to"))
   # inner_join drops the right-side key columns; re-create them from the kept left-side keys
   key_aliases <- stats::setNames(rlang::syms(from_keys), to_keys)
-  joined <- dplyr::mutate(joined, !!!key_aliases)
+  joined <- do.call(dplyr::mutate, c(list(.data = joined), key_aliases))
   target_props <- property_ids(target_type)
   selections <- resolve_target_columns(joined, target_props)
-  tbl <- dplyr::select(joined, !!!selections)
+  tbl <- do.call(dplyr::select, c(list(.data = joined), selections))
   os_new(os$ctx, target_type$id, tbl, target_props)
 }
 
@@ -114,10 +117,10 @@ os_search_around <- function(os, link_type_id) {
   joined <- dplyr::inner_join(os$tbl, source_tbl, by = by, suffix = c(".to", ".from"))
   # inner_join drops the right-side key columns; re-create them from the kept left-side keys
   key_aliases <- stats::setNames(rlang::syms(to_keys), from_keys)
-  joined <- dplyr::mutate(joined, !!!key_aliases)
+  joined <- do.call(dplyr::mutate, c(list(.data = joined), key_aliases))
   source_props <- property_ids(source_type)
   selections <- resolve_target_columns(joined, source_props, suffix = ".from")
-  tbl <- dplyr::select(joined, !!!selections)
+  tbl <- do.call(dplyr::select, c(list(.data = joined), selections))
   os_new(os$ctx, source_type$id, tbl, source_props)
 }
 
@@ -213,8 +216,8 @@ os_aggregate <- function(os, ..., .fns) {
     rlang::abort("`.fns` must be a named list of summary expressions.")
   }
   validate_summary_exprs(object_type, fns)
-  tbl <- rlang::inject(dplyr::group_by(os$tbl, !!!group_quos))
-  tbl <- rlang::inject(dplyr::summarise(tbl, !!!fns, .groups = "drop"))
+  tbl <- do.call(dplyr::group_by, c(list(.data = os$tbl), group_quos))
+  tbl <- do.call(dplyr::summarise, c(list(.data = tbl), fns, list(.groups = "drop")))
   os_new(os$ctx, os$object_type_id, tbl, dplyr::tbl_vars(tbl))
 }
 
