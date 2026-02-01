@@ -15,11 +15,7 @@ export(os_to_graph)
 S3method(print, OntologyContext)
 S3method(print, ObjectSet)
 
-importFrom(DBI, dbConnect, dbExistsTable, dbWriteTable, Id)
-importFrom(dplyr, tbl, filter, select, mutate, inner_join, union, intersect,
-           group_by, summarise, tally, collect, tbl_vars, all_of, bind_rows, n)
-importFrom(dbplyr, sql, sql_render)
-importFrom(rlang, abort, enquos, sym, syms, set_names, is_symbol, is_call,
-           is_pairlist, is_expression, is_function, is_list, is_quosure,
-           as_string, get_expr)
-importFrom(stats, setNames)
+importFrom(DBI, dbExistsTable)
+importFrom(dplyr, tbl)
+importFrom(dbplyr, sql)
+importFrom(rlang, abort)

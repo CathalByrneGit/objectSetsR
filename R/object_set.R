@@ -80,6 +80,9 @@ os_traverse <- function(os, link_type_id) {
   }
   by <- stats::setNames(to_keys, from_keys)
   joined <- dplyr::inner_join(os$tbl, target_tbl, by = by, suffix = c(".from", ".to"))
+  # inner_join drops the right-side key columns; re-create them from the kept left-side keys
+  key_aliases <- stats::setNames(rlang::syms(from_keys), to_keys)
+  joined <- dplyr::mutate(joined, !!!key_aliases)
   target_props <- property_ids(target_type)
   selections <- resolve_target_columns(joined, target_props)
   tbl <- dplyr::select(joined, !!!selections)
@@ -109,6 +112,9 @@ os_search_around <- function(os, link_type_id) {
   }
   by <- stats::setNames(from_keys, to_keys)
   joined <- dplyr::inner_join(os$tbl, source_tbl, by = by, suffix = c(".to", ".from"))
+  # inner_join drops the right-side key columns; re-create them from the kept left-side keys
+  key_aliases <- stats::setNames(rlang::syms(to_keys), from_keys)
+  joined <- dplyr::mutate(joined, !!!key_aliases)
   source_props <- property_ids(source_type)
   selections <- resolve_target_columns(joined, source_props, suffix = ".from")
   tbl <- dplyr::select(joined, !!!selections)
