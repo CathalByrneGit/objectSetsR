@@ -164,17 +164,23 @@ build_object_tbl <- function(ctx, object_type) {
   table <- object_source_table(object_type)
   base_tbl <- dplyr::tbl(con, table)
   props <- object_properties(object_type)
-  exprs <- lapply(props, function(prop) {
+  prop_ids <- vapply(props, `[[`, character(1), "id")
+  # Only mutate properties that need renaming or computation.
+  # Skip identity mappings (column == id) to avoid self-referential
+  # expressions that cause infinite recursion in dbplyr.
+  exprs <- list()
+  for (prop in props) {
     mapping <- property_source_expr(prop)
     if (!is.null(mapping$expression)) {
-      dbplyr::sql(mapping$expression)
-    } else {
-      rlang::sym(mapping$column)
+      exprs[[prop$id]] <- dbplyr::sql(mapping$expression)
+    } else if (mapping$column != prop$id) {
+      exprs[[prop$id]] <- rlang::sym(mapping$column)
     }
-  })
-  names(exprs) <- vapply(props, `[[`, character(1), "id")
-  base_tbl <- dplyr::mutate(base_tbl, !!!exprs)
-  dplyr::select(base_tbl, dplyr::all_of(names(exprs)))
+  }
+  if (length(exprs) > 0) {
+    base_tbl <- dplyr::mutate(base_tbl, !!!exprs)
+  }
+  dplyr::select(base_tbl, dplyr::all_of(prop_ids))
 }
 
 os_new <- function(ctx, object_type_id, tbl, properties = NULL) {

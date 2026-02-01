@@ -221,7 +221,7 @@ test_that("ontologySpecR bundle objects work end-to-end", {
       ontologySpecR::property_def(id = "country", type = "string"),
       ontologySpecR::property_def(id = "name", type = "string")
     ),
-    source = ontologySpecR::source_binding(table = "airports")
+    source_table = "airports"
   )
 
   route <- ontologySpecR::object_type(
@@ -233,22 +233,20 @@ test_that("ontologySpecR bundle objects work end-to-end", {
       ontologySpecR::property_def(id = "destination_id", type = "string"),
       ontologySpecR::property_def(id = "stops", type = "integer")
     ),
-    source = ontologySpecR::source_binding(table = "routes")
+    source_table = "routes"
   )
 
   link <- ontologySpecR::link_type(
     id = "RouteOrigin",
     from = "FlightRoute",
     to = "Airport",
-    join = ontologySpecR::join_def(
-      from_keys = "origin_id",
-      to_keys = "airport_id"
-    )
+    join_from_keys = "origin_id",
+    join_to_keys = "airport_id"
   )
 
   b <- ontologySpecR::bundle(
-    spec_version = "1.0.0",
     bundle_id = "test",
+    bundle_version = "1.0.0",
     objects = list(airport, route),
     links = list(link)
   )
