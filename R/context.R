@@ -104,28 +104,60 @@ validate_property_ids <- function(object_type, symbols) {
   }
 }
 
+#' Extract symbol names from a filter expression (safe for validation)
 symbols_in_expr <- function(expr) {
+  # Symbols like stops, distance, etc.
   if (rlang::is_symbol(expr)) {
     name <- rlang::as_string(expr)
-    if (name %in% c(".data", "TRUE", "FALSE", "NULL")) {
-      return(character(0))
-    }
+    if (name %in% c(".data", "TRUE", "FALSE", "NULL")) return(character(0))
     return(name)
   }
+  
+  # Calls like stops == 0L, stops %in% c(...), is.na(stops), .data$stops, etc.
   if (rlang::is_call(expr)) {
+    # Special-case `.data$prop` to return just `prop`
+    if (rlang::call_name(expr) == "$" && length(expr) == 3L) {
+      lhs <- expr[[2]]
+      rhs <- expr[[3]]
+      if (rlang::is_symbol(lhs) && rlang::as_string(lhs) == ".data") {
+        if (rlang::is_symbol(rhs)) return(rlang::as_string(rhs))
+        if (rlang::is_string(rhs)) return(rhs)
+      }
+    }
+    
+    # Recurse into call arguments (NOT into arbitrary lists/pairlists)
     args <- as.list(expr)[-1]
-    return(unique(unlist(lapply(args, symbols_in_expr))))
+    return(unique(unlist(lapply(args, symbols_in_expr), use.names = FALSE)))
   }
-  if (rlang::is_pairlist(expr) || rlang::is_expression(expr)) {
-    return(unique(unlist(lapply(as.list(expr), symbols_in_expr))))
-  }
+  
+  # Everything else: constants, pairlists, expressions, lists, etc.
   character(0)
 }
 
+#' Validate that filter expressions only refer to known properties
 validate_filter_exprs <- function(object_type, quos) {
-  symbols <- unique(unlist(lapply(quos, function(q) symbols_in_expr(rlang::get_expr(q)))))
+  # `quos` is a list of quosures (from enquos)
+  symbols <- unique(unlist(
+    lapply(quos, function(q) symbols_in_expr(rlang::get_expr(q))),
+    use.names = FALSE
+  ))
+  
+  # Drop operator/function symbols that can show up during traversal
+  symbols <- setdiff(
+    symbols,
+    c(
+      # infix operators / primitives
+      "==", "!=", "<", "<=", ">", ">=", "&", "|", "!", "+", "-", "*", "/", "^",
+      "$", "[", "[[", "(", "{", "~", ":", "::", ":::",
+      # common helpers that might appear in filters
+      "c", "list", "is.na", "if_else", "case_when", "between", "in", "%in%"
+    )
+  )
+  
   validate_property_ids(object_type, symbols)
 }
+
+
 
 validate_group_exprs <- function(object_type, quos) {
   symbols <- unique(unlist(lapply(quos, function(q) symbols_in_expr(rlang::get_expr(q)))))
@@ -178,7 +210,7 @@ build_object_tbl <- function(ctx, object_type) {
     }
   }
   if (length(exprs) > 0) {
-    base_tbl <- dplyr::mutate(base_tbl, !!!exprs)
+    base_tbl <- do.call(dplyr::mutate, c(list(.data = base_tbl), exprs))
   }
   dplyr::select(base_tbl, dplyr::all_of(prop_ids))
 }

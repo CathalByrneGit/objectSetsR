@@ -24,12 +24,18 @@ object_set <- function(ctx, object_type_id) {
 #' @export
 os_filter <- function(os, ...) {
   ensure_object_set(os)
+  
   quos <- rlang::enquos(...)
+  
   object_type <- get_object_type(os$ctx, os$object_type_id)
   validate_filter_exprs(object_type, quos)
-  tbl <- rlang::inject(dplyr::filter(os$tbl, !!quos))
+  
+  # Splice the quosures into filter():
+  tbl <- dplyr::filter(os$tbl, !!!quos)
+  
   os_new(os$ctx, os$object_type_id, tbl, os$properties)
 }
+
 
 #' Select properties from an object set
 #'
