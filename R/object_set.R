@@ -403,7 +403,8 @@ os_to_graph <- function(ctx, object_type_ids, link_type_ids) {
     joined <- dplyr::inner_join(
       dplyr::select(from_tbl, dplyr::all_of(from_keys)),
       dplyr::select(to_tbl, dplyr::all_of(to_keys)),
-      by = by
+      by = by,
+      keep = TRUE
     )
     edge_df <- dplyr::collect(joined)
     from_key <- compose_node_key(edge_df[from_keys])
