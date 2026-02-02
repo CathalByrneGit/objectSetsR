@@ -148,7 +148,7 @@ os_intersect(from_dub, nonstop) |> os_collect()
 
 ```{r aggregate}
 object_set(ctx, "FlightRoute") |>
-  os_aggregate(origin_id, .fns = list(n = dplyr::n())) |>
+  os_aggregate(origin_id, n = dplyr::n()) |>
   os_collect()
 ```
 

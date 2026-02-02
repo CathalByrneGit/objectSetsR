@@ -95,14 +95,15 @@ os_traverse <- function(os, link_type_id) {
     rlang::abort(paste0("Link ", link$id, " does not originate from ", os$object_type_id, "."))
   }
   
+  source_type <- get_object_type(os$ctx, os$object_type_id)
   target_type <- get_object_type(os$ctx, link$to)
   target_tbl <- build_object_tbl(os$ctx, target_type)
-  
+
   join <- link$join %||% list()
   from_keys <- as_chr_vec(join$fromKeys %||% join$from_keys, "join$fromKeys")
   to_keys   <- as_chr_vec(join$toKeys   %||% join$to_keys,   "join$toKeys")
 
-  validate_property_ids(object_type, from_keys)
+  validate_property_ids(source_type, from_keys)
   validate_property_ids(target_type, to_keys)
   
   if (is.null(from_keys) || is.null(to_keys)) {
@@ -145,16 +146,13 @@ os_search_around <- function(os, link_type_id) {
   source_type <- get_object_type(os$ctx, link$from)
   source_tbl <- build_object_tbl(os$ctx, source_type)
   join <- link$join %||% list()
-  from_keys <- join$fromKeys %||% join$from_keys
-  to_keys <- join$toKeys %||% join$to_keys
+  from_keys <- as_chr_vec(join$fromKeys %||% join$from_keys, "join$fromKeys")
+  to_keys   <- as_chr_vec(join$toKeys   %||% join$to_keys,   "join$toKeys")
   if (is.null(from_keys) || is.null(to_keys)) {
     rlang::abort(paste0("Link ", link$id, " is missing join keys."))
   }
   by <- stats::setNames(from_keys, to_keys)
-  joined <- dplyr::inner_join(os$tbl, source_tbl, by = by, suffix = c(".to", ".from"))
-  # inner_join drops the right-side key columns; re-create them from the kept left-side keys
-  key_aliases <- stats::setNames(rlang::syms(to_keys), from_keys)
-  joined <- dplyr::mutate(joined, !!!key_aliases)
+  joined <- dplyr::inner_join(os$tbl, source_tbl, by = by, suffix = c(".to", ".from"), keep = TRUE)
   source_props <- property_ids(source_type)
   selections <- resolve_target_columns(joined, source_props, suffix = ".from")
   tbl <- dplyr::select(joined, !!!selections)
@@ -356,8 +354,8 @@ os_to_graph <- function(ctx, object_type_ids, link_type_ids) {
     from_type <- get_object_type(ctx, link$from)
     to_type <- get_object_type(ctx, link$to)
     join <- link$join %||% list()
-    from_keys <- join$fromKeys %||% join$from_keys
-    to_keys <- join$toKeys %||% join$to_keys
+    from_keys <- as_chr_vec(join$fromKeys %||% join$from_keys, "join$fromKeys")
+    to_keys   <- as_chr_vec(join$toKeys   %||% join$to_keys,   "join$toKeys")
     if (is.null(from_keys) || is.null(to_keys)) {
       rlang::abort(paste0("Link ", link$id, " is missing join keys."))
     }

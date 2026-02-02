@@ -115,8 +115,9 @@ symbols_in_expr <- function(expr) {
   
   # Calls like stops == 0L, stops %in% c(...), is.na(stops), .data$stops, etc.
   if (rlang::is_call(expr)) {
+    fn_name <- rlang::call_name(expr)
     # Special-case `.data$prop` to return just `prop`
-    if (rlang::call_name(expr) == "$" && length(expr) == 3L) {
+    if (!is.null(fn_name) && fn_name == "$" && length(expr) == 3L) {
       lhs <- expr[[2]]
       rhs <- expr[[3]]
       if (rlang::is_symbol(lhs) && rlang::as_string(lhs) == ".data") {
