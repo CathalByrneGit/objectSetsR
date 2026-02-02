@@ -15,6 +15,44 @@ object_set <- function(ctx, object_type_id) {
   os_new(ctx, object_type_id, tbl, props)
 }
 
+#' Create a lazy object set by interface
+#'
+#' Finds all object types that implement the given interface and returns
+#' their union, projected to only the interface properties. This is useful
+#' for querying across heterogeneous types that share a common contract
+#' (e.g., all \code{GeoLocated} objects).
+#'
+#' @param ctx An \code{OntologyContext}.
+#' @param interface_id The interface identifier.
+#'
+#' @return An \code{ObjectSet} containing the union of all implementing types,
+#'   projected to the interface properties.
+#' @export
+object_set_by_interface <- function(ctx, interface_id) {
+  iface <- get_interface(ctx, interface_id)
+  iface_props <- interface_property_ids(iface)
+  type_ids <- find_implementing_types(ctx, interface_id)
+  if (length(type_ids) == 0) {
+    rlang::abort(paste0("No object types implement interface: ", interface_id))
+  }
+  os_list <- lapply(type_ids, function(tid) {
+    os <- object_set(ctx, tid)
+    prop_syms <- rlang::syms(iface_props)
+    names(prop_syms) <- iface_props
+    tbl <- dplyr::select(os$tbl, !!!prop_syms)
+    os_new(ctx, tid, tbl, iface_props)
+  })
+  result <- os_list[[1]]
+  if (length(os_list) > 1) {
+    for (i in seq(2, length(os_list))) {
+      tbl <- dplyr::union(result$tbl, os_list[[i]]$tbl)
+      result <- os_new(ctx, interface_id, tbl, iface_props)
+    }
+  }
+  # Use the interface_id as the object_type_id for the unioned set
+  os_new(ctx, interface_id, result$tbl, iface_props)
+}
+
 #' Filter an object set
 #'
 #' @param os An \code{ObjectSet}.

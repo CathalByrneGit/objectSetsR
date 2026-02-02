@@ -1,5 +1,6 @@
 export(ontology_context)
 export(object_set)
+export(object_set_by_interface)
 export(os_filter)
 export(os_select)
 export(os_traverse)

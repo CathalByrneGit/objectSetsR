@@ -30,6 +30,43 @@ get_link_types <- function(bundle_list) {
   index_by_id(link_types)
 }
 
+get_interface_types <- function(bundle_list) {
+  ifaces <- bundle_list$interfaces %||% bundle_list$interfaceTypes %||%
+    bundle_list$interface_types
+  if (is.null(ifaces)) return(list())
+  index_by_id(ifaces)
+}
+
+get_interface <- function(ctx, interface_id) {
+  iface <- ctx$interface_types[[interface_id]]
+  if (is.null(iface)) {
+    rlang::abort(paste0("Unknown interface: ", interface_id))
+  }
+  iface
+}
+
+interface_property_ids <- function(interface_type) {
+  props <- interface_type$properties %||% interface_type$propertys %||%
+    interface_type$props
+  if (is.null(props) || length(props) == 0) {
+    rlang::abort(paste0("Interface ", interface_type$id, " has no properties."))
+  }
+  vapply(props, `[[`, character(1), "id")
+}
+
+find_implementing_types <- function(ctx, interface_id) {
+  matches <- character(0)
+  for (obj in ctx$object_types) {
+    impls <- obj$implements %||% obj$interfaces
+    if (is.null(impls)) next
+    if (is.list(impls)) impls <- unlist(impls, use.names = FALSE)
+    if (interface_id %in% impls) {
+      matches <- c(matches, obj$id)
+    }
+  }
+  matches
+}
+
 get_object_type <- function(ctx, object_type_id) {
   obj <- ctx$object_types[[object_type_id]]
   if (is.null(obj)) {
@@ -165,17 +202,29 @@ validate_group_exprs <- function(object_type, quos) {
   validate_property_ids(object_type, symbols)
 }
 
-validate_summary_exprs <- function(object_type, .fns) {
-  if (length(.fns) == 0) {
-    rlang::abort("`.fns` must contain at least one aggregation expression.")
+validate_summary_exprs <- function(object_type, summary_quos) {
+  if (length(summary_quos) == 0) {
+    rlang::abort("At least one named summary expression is required.")
   }
-  symbols <- unique(unlist(lapply(.fns, function(expr) {
+  symbols <- unique(unlist(lapply(summary_quos, function(expr) {
     if (rlang::is_quosure(expr)) {
       symbols_in_expr(rlang::get_expr(expr))
     } else {
       symbols_in_expr(expr)
     }
-  })))
+  }), use.names = FALSE))
+  # Strip operator/function symbols (same rationale as validate_filter_exprs)
+  symbols <- setdiff(
+    symbols,
+    c(
+      "==", "!=", "<", "<=", ">", ">=", "&", "|", "!", "+", "-", "*", "/", "^",
+      "$", "[", "[[", "(", "{", "~", ":", "::", ":::",
+      "c", "list", "is.na", "if_else", "case_when", "between", "in", "%in%",
+      "n", "sum", "mean", "min", "max", "sd", "var", "median",
+      "first", "last", "nth", "n_distinct",
+      "dplyr", "base", "stats"
+    )
+  )
   validate_property_ids(object_type, symbols)
 }
 
@@ -246,7 +295,8 @@ ontology_context <- function(bundle, connection) {
     bundle_list = bundle_list,
     connection = connection,
     object_types = get_object_types(bundle_list),
-    link_types = get_link_types(bundle_list)
+    link_types = get_link_types(bundle_list),
+    interface_types = get_interface_types(bundle_list)
   )
   class(ctx) <- "OntologyContext"
   context_validate_tables(ctx)
@@ -256,11 +306,16 @@ ontology_context <- function(bundle, connection) {
 print.OntologyContext <- function(x, ...) {
   n_obj <- length(x$object_types)
   n_link <- length(x$link_types)
+  n_iface <- length(x$interface_types)
   con_class <- class(x$connection)[[1]]
-  cat(sprintf("<OntologyContext> %d object type%s, %d link type%s (%s)\n",
-              n_obj, if (n_obj == 1) "" else "s",
-              n_link, if (n_link == 1) "" else "s",
-              con_class))
+  parts <- sprintf("%d object type%s, %d link type%s",
+                   n_obj, if (n_obj == 1) "" else "s",
+                   n_link, if (n_link == 1) "" else "s")
+  if (n_iface > 0) {
+    parts <- paste0(parts, sprintf(", %d interface%s",
+                                   n_iface, if (n_iface == 1) "" else "s"))
+  }
+  cat(sprintf("<OntologyContext> %s (%s)\n", parts, con_class))
   invisible(x)
 }
 
