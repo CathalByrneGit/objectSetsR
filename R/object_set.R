@@ -69,7 +69,7 @@ os_traverse <- function(os, link_type_id) {
   by <- stats::setNames(to_keys, from_keys)
   joined <- dplyr::inner_join(os$tbl, target_tbl, by = by, suffix = c(".from", ".to"))
   target_props <- property_ids(target_type)
-  selections <- resolve_target_columns(joined, target_props)
+  selections <- resolve_target_columns(joined, target_props, suffix = ".to")
   tbl <- dplyr::select(joined, !!!selections)
   os_new(os$ctx, target_type$id, tbl, target_props)
 }
@@ -98,7 +98,7 @@ os_search_around <- function(os, link_type_id) {
   by <- stats::setNames(from_keys, to_keys)
   joined <- dplyr::inner_join(os$tbl, source_tbl, by = by, suffix = c(".to", ".from"))
   source_props <- property_ids(source_type)
-  selections <- resolve_target_columns(joined, source_props)
+  selections <- resolve_target_columns(joined, target_props, suffix = ".to")
   tbl <- dplyr::select(joined, !!!selections)
   os_new(os$ctx, source_type$id, tbl, source_props)
 }
