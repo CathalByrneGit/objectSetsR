@@ -1,10 +1,9 @@
 bundle_as_list <- function(bundle) {
-  if (is.list(bundle) && !is.null(bundle$objectTypes)) {
-    return(bundle)
-  }
-  if (inherits(bundle, "bundle")) {
+  # Real ontologySpecR bundle (class "ontology_bundle")
+  if (inherits(bundle, "ontology_bundle")) {
     return(ontologySpecR::as_list(bundle))
   }
+  # Raw list with either naming convention
   if (is.list(bundle)) {
     return(bundle)
   }
@@ -16,7 +15,7 @@ index_by_id <- function(items) {
 }
 
 get_object_types <- function(bundle_list) {
-  obj_types <- bundle_list$objectTypes %||% bundle_list$object_types
+  obj_types <- bundle_list$objects %||% bundle_list$objectTypes %||% bundle_list$object_types
   if (is.null(obj_types)) {
     rlang::abort("Bundle is missing object types.")
   }
@@ -24,7 +23,7 @@ get_object_types <- function(bundle_list) {
 }
 
 get_link_types <- function(bundle_list) {
-  link_types <- bundle_list$linkTypes %||% bundle_list$link_types
+  link_types <- bundle_list$links %||% bundle_list$linkTypes %||% bundle_list$link_types
   if (is.null(link_types)) {
     rlang::abort("Bundle is missing link types.")
   }
