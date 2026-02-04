@@ -59,6 +59,14 @@ object_primary_key <- function(object_type) {
   if (is.null(pk)) {
     rlang::abort(paste0("Object type ", object_type$id, " has no primary key."))
   }
+  # ontologySpecR returns {properties: [...], strategy: "natural"}
+  if (is.list(pk) && !is.null(pk$properties)) {
+    return(pk$properties)
+  }
+  # Raw string or character vector
+  if (is.character(pk)) {
+    return(pk)
+  }
   pk
 }
 
