@@ -171,6 +171,66 @@ object_set(ctx, "FlightRoute") |>
   os_show_query()
 ```
 
+# Interface-aware queries
+
+Bundles can define interfaces — shared property contracts that multiple object
+types implement. Use `object_set_by_interface()` to query across all
+implementing types at once.
+
+```{r interface-setup}
+# Create a bundle with an interface
+interface_bundle <- list(
+  objects = list(
+    list(
+      id = "Airport",
+      primaryKey = "airport_id",
+      source = list(table = "airports"),
+      implements = list("Named"),
+      properties = list(
+        list(id = "airport_id", type = "string"),
+        list(id = "country", type = "string"),
+        list(id = "name", type = "string")
+      )
+    ),
+    list(
+      id = "FlightRoute",
+      primaryKey = "route_id",
+      source = list(table = "routes"),
+      implements = list("Named"),
+      properties = list(
+        list(id = "route_id", type = "string"),
+        list(id = "origin_id", type = "string"),
+        list(id = "destination_id", type = "string"),
+        list(id = "stops", type = "integer"),
+        list(id = "name", type = "string", source = list(column = "route_id"))
+      )
+    )
+  ),
+  links = list(),
+  interfaces = list(
+    list(
+      id = "Named",
+      properties = list(
+        list(id = "name", type = "string")
+      )
+    )
+  )
+)
+
+ctx_iface <- ontology_context(interface_bundle, con)
+ctx_iface
+```
+
+```{r interface-query}
+# Query all Named objects (airports + routes)
+all_named <- object_set_by_interface(ctx_iface, "Named") |>
+  os_collect()
+all_named
+```
+
+The result contains only the interface properties, projected from all
+implementing types and unioned together.
+
 ```{r cleanup, include=FALSE}
 DBI::dbDisconnect(con, shutdown = TRUE)
 ```
