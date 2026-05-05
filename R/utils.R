@@ -19,17 +19,28 @@ ensure_same_object_type <- function(os1, os2) {
 }
 
 resolve_target_columns <- function(joined_tbl, target_props, suffix = ".to") {
+  # Ensure we have character property ids
+  if (!is.character(target_props)) {
+    rlang::abort("`target_props` must be a character vector of property ids.")
+  }
+  
   vars <- dplyr::tbl_vars(joined_tbl)
-  source_names <- vapply(target_props, function(prop) {
-    suffixed <- paste0(prop, suffix)
-    if (suffixed %in% vars) {
-      suffixed
-    } else if (prop %in% vars) {
-      prop
-    } else {
-      NA_character_
-    }
-  }, character(1))
+  
+  source_names <- vapply(
+    target_props,
+    function(prop) {
+      prop_to <- paste0(prop, suffix)
+      if (prop_to %in% vars) {
+        prop_to
+      } else if (prop %in% vars) {
+        prop
+      } else {
+        NA_character_
+      }
+    },
+    character(1)
+  )
+  
   if (anyNA(source_names)) {
     missing <- target_props[is.na(source_names)]
     rlang::abort(paste0(
@@ -37,6 +48,7 @@ resolve_target_columns <- function(joined_tbl, target_props, suffix = ".to") {
       paste(missing, collapse = ", ")
     ))
   }
+  
   rlang::set_names(rlang::syms(source_names), target_props)
 }
 
