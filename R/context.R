@@ -2,6 +2,7 @@ bundle_as_list <- function(bundle) {
   if (inherits(bundle, "ontology_bundle")) {
     return(ontologySpecR::as_list(bundle))
   }
+  # Raw list with either naming convention
   if (is.list(bundle)) {
     return(bundle)
   }
