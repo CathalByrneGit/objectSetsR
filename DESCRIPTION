@@ -20,6 +20,8 @@ Imports:
 Suggests:
     duckdb,
     tidygraph,
+    vertexR,
+    RSQLite,
     testthat (>= 3.0.0),
     knitr,
     rmarkdown

@@ -167,6 +167,160 @@ os_traverse <- function(os, link_type_id) {
   os_new(os$ctx, target_type$id, tbl, target_props)
 }
 
+#' Multi-hop traversal using DuckPGQ
+#'
+#' Follows a link type 1 to N hops from the current object set, returning all
+#' reachable destination objects. Requires DuckPGQ to be loaded in the
+#' connection (DuckDB only).
+#'
+#' @param os An \code{ObjectSet}.
+#' @param link_type_id Character. The link type to traverse.
+#' @param min_hops Integer. Minimum number of hops. Default 1.
+#' @param max_hops Integer. Maximum number of hops. Default 3.
+#' @param direction One of "forward", "reverse", "both". Default "forward".
+#' @param include_path Logical. If TRUE, include a path_length column. Default FALSE.
+#'
+#' @details
+#' Use \code{os_traverse()} for single-hop traversal (pure SQL JOIN, works on
+#' any DBI backend). Use \code{os_traverse_deep()} for multi-hop traversal
+#' (1-N hops, requires DuckPGQ/DuckDB only).
+#'
+#' @return An \code{ObjectSet} of the destination type containing all objects
+#'   reachable within the specified hop range.
+#' @export
+os_traverse_deep <- function(os, link_type_id,
+                              min_hops = 1L, max_hops = 3L,
+                              direction = c("forward", "reverse", "both"),
+                              include_path = FALSE) {
+  ensure_object_set(os)
+  direction <- match.arg(direction)
+  min_hops <- as.integer(min_hops)
+  max_hops <- as.integer(max_hops)
+
+  if (min_hops < 1L) {
+    rlang::abort("`min_hops` must be at least 1.")
+  }
+  if (max_hops < min_hops) {
+    rlang::abort("`max_hops` must be >= `min_hops`.")
+  }
+
+  # Check for DuckDB connection
+ con <- os$ctx$connection
+  if (!inherits(con, "duckdb_connection")) {
+    rlang::abort(
+      "os_traverse_deep() requires a DuckDB connection. Use os_traverse() for single-hop traversal on other backends."
+    )
+  }
+
+  # Check for vertexR package
+  if (!requireNamespace("vertexR", quietly = TRUE)) {
+    rlang::abort(
+      "os_traverse_deep() requires the {vertexR} package. Install it with: install.packages('vertexR')"
+    )
+  }
+
+  # Check DuckPGQ availability
+  if (!vertexR::vx_pgq_available(con)) {
+    rlang::abort(
+      "os_traverse_deep() requires DuckPGQ. Use os_traverse() for single-hop traversal or install DuckPGQ."
+    )
+  }
+
+  # Verify/create property graph
+  graph_name <- vertexR::vx_pgq_graph_name(os$ctx$bundle)
+  if (!vertexR::vx_pgq_graph_exists(con, graph_name)) {
+    message(sprintf("Property graph '%s' not found. Creating it now...", graph_name))
+    vertexR::vx_pgq_setup(os$ctx$bundle, con)
+  }
+
+  # Get link type and determine target
+  link <- get_link_type(os$ctx, link_type_id)
+  target_type_id <- switch(
+    direction,
+    forward = link$to,
+    reverse = link$from,
+    both = link$to  # For "both", we return the "to" type
+  )
+
+  # Get primary key for the source object type
+  source_type <- get_object_type(os$ctx, os$object_type_id)
+  source_pk <- object_primary_key(source_type)
+
+  # Collect seed IDs from current object set
+  seeds <- os |>
+    os_select(!!!rlang::syms(source_pk)) |>
+    os_collect()
+
+  if (nrow(seeds) == 0) {
+    # Empty seed set - return empty ObjectSet of target type
+    target_type <- get_object_type(os$ctx, target_type_id)
+    target_tbl <- build_object_tbl(os$ctx, target_type)
+    target_tbl <- dplyr::filter(target_tbl, FALSE)
+    return(os_new(os$ctx, target_type_id, target_tbl, property_ids(target_type)))
+  }
+
+  seed_ids <- if (length(source_pk) == 1) {
+    seeds[[source_pk]]
+  } else {
+    apply(seeds, 1, function(row) paste(row, collapse = "|"))
+  }
+
+  # Call vertexR for deep traversal
+  result <- vertexR::vx_pgq_neighbors(
+    con = con,
+    graph_name = graph_name,
+    seed_ids = seed_ids,
+    link_type_id = link_type_id,
+    min_hops = min_hops,
+    max_hops = max_hops,
+    direction = direction
+  )
+
+  if (nrow(result) == 0) {
+    # No results - return empty ObjectSet
+    target_type <- get_object_type(os$ctx, target_type_id)
+    target_tbl <- build_object_tbl(os$ctx, target_type)
+    target_tbl <- dplyr::filter(target_tbl, FALSE)
+    return(os_new(os$ctx, target_type_id, target_tbl, property_ids(target_type)))
+  }
+
+  # Get target type and its primary key
+  target_type <- get_object_type(os$ctx, target_type_id)
+  target_pk <- object_primary_key(target_type)
+  target_ids <- result$target_id
+
+  # Build ObjectSet filtered to reachable target IDs
+  target_os <- object_set(os$ctx, target_type_id)
+
+  if (length(target_pk) == 1) {
+    # Single-column PK - simple IN filter
+    target_os <- os_filter(target_os, !!rlang::sym(target_pk) %in% !!target_ids)
+  } else {
+    # Multi-column PK - need to parse composite keys
+    rlang::abort("Multi-column primary keys not yet supported in os_traverse_deep().")
+  }
+
+  # Add path_length column if requested
+  if (include_path && "path_length" %in% names(result)) {
+    # Create a lookup table and join
+    path_df <- data.frame(
+      target_id = result$target_id,
+      path_length = result$path_length,
+      stringsAsFactors = FALSE
+    )
+    names(path_df)[1] <- target_pk
+    path_tbl <- dplyr::copy_to(con, path_df, name = "path_lengths", overwrite = TRUE)
+    target_os$tbl <- dplyr::left_join(
+      target_os$tbl,
+      path_tbl,
+      by = target_pk
+    )
+    target_os$properties <- c(target_os$properties, "path_length")
+  }
+
+  target_os
+}
+
 
 #' Traverse a link in reverse
 #'
