@@ -242,6 +242,195 @@ context_validate_tables <- function(ctx) {
   ctx
 }
 
+#' Check that an object type satisfies an interface
+#'
+#' @param object_type An object type (list with id, properties, etc.).
+#' @param interface An interface type (list with id, properties/requiredProperties).
+#' @param bundle Optional bundle for link/action validation.
+#' @param error Logical. If TRUE (default), abort on first violation.
+#'   If FALSE, return a character vector of violation messages.
+#' @return TRUE invisibly on success, or character vector of violations.
+#' @keywords internal
+check_implements <- function(object_type, interface, bundle = NULL, error = TRUE) {
+  violations <- character(0)
+  ot_id <- object_type$id
+  iface_id <- interface$id
+
+
+  # Get object type property IDs and their definitions
+
+  ot_props <- object_properties(object_type)
+  ot_prop_ids <- vapply(ot_props, `[[`, character(1), "id")
+  ot_props_by_id <- stats::setNames(ot_props, ot_prop_ids)
+
+  # Get required properties from interface
+
+  req_props <- interface$requiredProperties %||% interface$required_properties %||%
+    interface$properties
+  if (!is.null(req_props)) {
+    for (req in req_props) {
+      req_id <- req$id
+      req_type <- req$type
+
+      if (!(req_id %in% ot_prop_ids)) {
+        violations <- c(violations, sprintf(
+          "[%s] missing required property '%s' (type: %s)",
+          ot_id, req_id, req_type %||% "any"
+        ))
+        next
+      }
+
+      # Check type match
+      actual_prop <- ot_props_by_id[[req_id]]
+      actual_type <- actual_prop$type
+      if (!is.null(req_type) && !is.null(actual_type) && actual_type != req_type) {
+        violations <- c(violations, sprintf(
+          "[%s] property '%s' has type '%s' but interface requires '%s'",
+          ot_id, req_id, actual_type, req_type
+        ))
+      }
+
+      # Check nullable constraint
+      req_nullable <- req$nullable
+      actual_nullable <- actual_prop$nullable %||% TRUE
+      if (identical(req_nullable, FALSE) && !identical(actual_nullable, FALSE)) {
+        violations <- c(violations, sprintf(
+          "[%s] property '%s' must be non-nullable per interface '%s'",
+          ot_id, req_id, iface_id
+        ))
+      }
+    }
+  }
+
+  # Check required links (only if bundle provided)
+  if (!is.null(bundle)) {
+    bundle_list <- bundle_as_list(bundle)
+    link_types <- get_link_types(bundle_list)
+    link_ids <- names(link_types)
+
+    req_links <- interface$requiredLinks %||% interface$required_links
+    if (!is.null(req_links)) {
+      for (req_link in req_links) {
+        link_id <- req_link$linkTypeId %||% req_link$link_type_id %||% req_link$id
+        if (!(link_id %in% link_ids)) {
+          violations <- c(violations, sprintf(
+            "[%s] missing required link type '%s'",
+            ot_id, link_id
+          ))
+        }
+      }
+    }
+
+    # Check required actions
+    req_actions <- interface$requiredActions %||% interface$required_actions
+    if (!is.null(req_actions)) {
+      action_types <- bundle_list$actions %||% bundle_list$actionTypes %||%
+        bundle_list$action_types
+      action_ids <- if (!is.null(action_types)) {
+        vapply(action_types, `[[`, character(1), "id")
+      } else {
+        character(0)
+      }
+
+      for (req_action in req_actions) {
+        action_id <- if (is.character(req_action)) req_action else req_action$id
+        if (!(action_id %in% action_ids)) {
+          violations <- c(violations, sprintf(
+            "[%s] missing required action type '%s'",
+            ot_id, action_id
+          ))
+        }
+      }
+    }
+  }
+
+  if (error && length(violations) > 0) {
+    rlang::abort(paste(violations, collapse = "\n"))
+  }
+
+  if (length(violations) == 0) {
+    invisible(TRUE)
+  } else {
+    violations
+  }
+}
+
+#' Validate all interface implementations in a bundle
+#'
+#' @param bundle_list A bundle as a list (already converted via bundle_as_list).
+#' @param error Logical. Abort on violation (TRUE) or return violations (FALSE).
+#' @return Named list: object_type_id -> character vector of violations.
+#'   Empty list means fully valid.
+#' @keywords internal
+validate_interfaces <- function(bundle_list, error = TRUE) {
+  all_violations <- list()
+
+  ifaces <- bundle_list$interfaces %||% bundle_list$interfaceTypes %||%
+    bundle_list$interface_types
+  if (is.null(ifaces) || length(ifaces) == 0) {
+    return(all_violations)
+  }
+  ifaces_by_id <- stats::setNames(ifaces, vapply(ifaces, `[[`, character(1), "id"))
+
+  obj_types <- bundle_list$objects %||% bundle_list$objectTypes %||%
+    bundle_list$object_types
+  if (is.null(obj_types)) {
+    return(all_violations)
+  }
+
+  for (obj in obj_types) {
+    ot_id <- obj$id
+    impls <- obj$implements %||% obj$interfaces
+    if (is.null(impls)) next
+    if (is.list(impls)) impls <- unlist(impls, use.names = FALSE)
+
+    obj_violations <- character(0)
+    for (iface_id in impls) {
+      if (!(iface_id %in% names(ifaces_by_id))) {
+        obj_violations <- c(obj_violations, sprintf(
+          "[%s] implements unknown interface '%s'",
+          ot_id, iface_id
+        ))
+        next
+      }
+      iface <- ifaces_by_id[[iface_id]]
+      v <- check_implements(obj, iface, bundle = bundle_list, error = FALSE)
+      if (is.character(v) && length(v) > 0) {
+        obj_violations <- c(obj_violations, v)
+      }
+    }
+
+    if (length(obj_violations) > 0) {
+      all_violations[[ot_id]] <- obj_violations
+    }
+  }
+
+  if (error && length(all_violations) > 0) {
+    msg <- format_interface_violations(all_violations)
+    rlang::abort(msg)
+  }
+
+  all_violations
+}
+
+#' Format interface violations for display
+#'
+#' @param violations Named list from validate_interfaces().
+#' @return A single formatted string.
+#' @keywords internal
+format_interface_violations <- function(violations) {
+  if (length(violations) == 0) return("")
+
+  lines <- "Interface validation failed:"
+  for (ot_id in names(violations)) {
+    lines <- c(lines, sprintf("  %s:", ot_id))
+    for (v in violations[[ot_id]]) {
+      lines <- c(lines, sprintf("    - %s", v))
+    }
+  }
+  paste(lines, collapse = "\n")
+}
+
 build_object_tbl <- function(ctx, object_type) {
   con <- ctx$connection
   table <- object_source_table(object_type)
@@ -282,14 +471,20 @@ os_new <- function(ctx, object_type_id, tbl, properties = NULL) {
 #'
 #' Builds a runtime context from an \code{ontologySpecR} bundle and a DBI
 #' connection. The context validates that backing tables exist for each object
-#' type and is required for creating lazy \code{ObjectSet} instances.
+#' type and optionally validates interface implementations.
 #'
 #' @param bundle A bundle object from \code{ontologySpecR} or a compatible list.
 #' @param connection A \code{DBI} connection.
+#' @param strict Logical. If TRUE, abort on validation failures (missing tables,
+#'   interface violations). If FALSE (default), warn on interface violations but
+#'   still create the context. Missing tables always abort regardless of this flag.
+#' @param check_interfaces Logical. If TRUE (default), validate that object types
+#'   satisfy their declared interfaces. Set to FALSE to skip validation entirely.
 #'
 #' @return An \code{OntologyContext} object.
 #' @export
-ontology_context <- function(bundle, connection) {
+ontology_context <- function(bundle, connection, strict = FALSE,
+                              check_interfaces = TRUE) {
   bundle_list <- bundle_as_list(bundle)
   ctx <- list(
     bundle = bundle,
@@ -300,7 +495,24 @@ ontology_context <- function(bundle, connection) {
     interface_types = get_interface_types(bundle_list)
   )
   class(ctx) <- "OntologyContext"
+
+  # Validate backing tables (always aborts on missing)
   context_validate_tables(ctx)
+
+  # Validate interface implementations
+  if (check_interfaces) {
+    violations <- validate_interfaces(bundle_list, error = FALSE)
+    if (length(violations) > 0) {
+      msg <- format_interface_violations(violations)
+      if (strict) {
+        rlang::abort(msg)
+      } else {
+        warning(msg, call. = FALSE)
+      }
+    }
+  }
+
+  ctx
 }
 
 #' @export

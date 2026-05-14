@@ -481,3 +481,177 @@ test_that("print.OntologyContext shows interfaces when present", {
   ctx <- ontology_context(make_interface_bundle(), con)
   expect_output(print(ctx), "interface")
 })
+
+# ---- Interface validation tests ----
+
+test_that("context builds silently with compliant interface implementation", {
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+  # Airport has "name" property which matches the "Named" interface
+  bundle <- make_interface_bundle()
+  expect_silent(ontology_context(bundle, con, check_interfaces = TRUE))
+})
+
+test_that("context warns on non-compliant interface with strict=FALSE", {
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+  # Create bundle where Airport claims to implement "Named" but lacks "name"
+  bundle <- list(
+    objects = list(
+      list(
+        id = "Airport",
+        primaryKey = "airport_id",
+        source = list(table = "airports"),
+        implements = list("Named"),
+        properties = list(
+          list(id = "airport_id", type = "string"),
+          list(id = "country", type = "string")
+          # Missing "name" property!
+        )
+      )
+    ),
+    links = list(),
+    interfaces = list(
+      list(
+        id = "Named",
+        properties = list(list(id = "name", type = "string"))
+      )
+    )
+  )
+  expect_warning(
+    ontology_context(bundle, con, strict = FALSE, check_interfaces = TRUE),
+    "missing required property"
+  )
+})
+
+test_that("context aborts on non-compliant interface with strict=TRUE", {
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+  # Airport claims "Named" but lacks "name"
+  bundle <- list(
+    objects = list(
+      list(
+        id = "Airport",
+        primaryKey = "airport_id",
+        source = list(table = "airports"),
+        implements = list("Named"),
+        properties = list(
+          list(id = "airport_id", type = "string"),
+          list(id = "country", type = "string")
+        )
+      )
+    ),
+    links = list(),
+    interfaces = list(
+      list(
+        id = "Named",
+        properties = list(list(id = "name", type = "string"))
+      )
+    )
+  )
+  expect_error(
+    ontology_context(bundle, con, strict = TRUE, check_interfaces = TRUE),
+    "missing required property"
+  )
+})
+
+test_that("context skips interface validation when check_interfaces=FALSE", {
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+  # Non-compliant bundle (Airport missing "name")
+  bundle <- list(
+    objects = list(
+      list(
+        id = "Airport",
+        primaryKey = "airport_id",
+        source = list(table = "airports"),
+        implements = list("Named"),
+        properties = list(
+          list(id = "airport_id", type = "string"),
+          list(id = "country", type = "string")
+        )
+      )
+    ),
+    links = list(),
+    interfaces = list(
+      list(
+        id = "Named",
+        properties = list(list(id = "name", type = "string"))
+      )
+    )
+  )
+  # Should not warn or error when check_interfaces = FALSE
+  expect_silent(
+    ontology_context(bundle, con, strict = TRUE, check_interfaces = FALSE)
+  )
+})
+
+test_that("check_interfaces has no effect when bundle has no interfaces", {
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+  # Standard bundle without interfaces
+  bundle <- make_bundle()
+  expect_silent(ontology_context(bundle, con, check_interfaces = TRUE))
+})
+
+test_that("interface validation detects type mismatch", {
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+  bundle <- list(
+    objects = list(
+      list(
+        id = "Airport",
+        primaryKey = "airport_id",
+        source = list(table = "airports"),
+        implements = list("Named"),
+        properties = list(
+          list(id = "airport_id", type = "string"),
+          list(id = "name", type = "integer")  # Wrong type!
+        )
+      )
+    ),
+    links = list(),
+    interfaces = list(
+      list(
+        id = "Named",
+        properties = list(list(id = "name", type = "string"))
+      )
+    )
+  )
+  expect_warning(
+    ontology_context(bundle, con, strict = FALSE, check_interfaces = TRUE),
+    "has type 'integer' but interface requires 'string'"
+  )
+})
+
+test_that("interface validation detects unknown interface", {
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+  bundle <- list(
+    objects = list(
+      list(
+        id = "Airport",
+        primaryKey = "airport_id",
+        source = list(table = "airports"),
+        implements = list("NonExistentInterface"),
+        properties = list(
+          list(id = "airport_id", type = "string"),
+          list(id = "name", type = "string")
+        )
+      )
+    ),
+    links = list(),
+    interfaces = list()  # No interfaces defined!
+  )
+  expect_warning(
+    ontology_context(bundle, con, strict = FALSE, check_interfaces = TRUE),
+    "implements unknown interface"
+  )
+})
