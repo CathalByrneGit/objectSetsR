@@ -109,3 +109,35 @@ setup_duckdb <- function() {
   )
   con
 }
+
+# ---- os_to_graph helpers ----
+
+# A graph's edges as a sorted data frame of (from, to) .node_key pairs.
+graph_edge_keys <- function(g) {
+  nodes <- tidygraph::as_tibble(g, active = "nodes")
+  edges <- tidygraph::as_tibble(g, active = "edges")
+  out <- data.frame(
+    from = nodes$.node_key[edges$from],
+    to = nodes$.node_key[edges$to],
+    stringsAsFactors = FALSE
+  )
+  out <- out[order(out$from, out$to), , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
+
+expected_edges <- function(from, to) {
+  out <- data.frame(from = from, to = to, stringsAsFactors = FALSE)
+  out <- out[order(out$from, out$to), , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
+
+graph_node_types <- function(g) {
+  nodes <- tidygraph::as_tibble(g, active = "nodes")
+  edges <- tidygraph::as_tibble(g, active = "edges")
+  list(
+    from = nodes$.object_type[edges$from],
+    to = nodes$.object_type[edges$to]
+  )
+}

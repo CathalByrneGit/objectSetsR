@@ -1,3 +1,21 @@
+# objectSetsR 0.2.1
+
+* Fixed `os_to_graph()` producing self-loops and wrong endpoints. Edges now run
+  from the source object to the target object, identified by their primary
+  keys, instead of being built from the join-column values on both sides.
+* `os_to_graph()` node keys are namespaced by object type
+  (`"<ObjectType>::<primary key>"`), so equal key values on different types are
+  distinct nodes. Composite keys are joined column by column with `"|"`.
+* `os_to_graph()` no longer breaks when both tables use the same column name,
+  and warns once per link (naming the count) when edges are dropped because an
+  endpoint type is not in `object_type_ids`, rather than producing `NA` edges.
+* Property and link-join reads go through the new ontologySpecR 0.2.1
+  accessors (`property_column()`, `property_expression()`,
+  `object_properties()`, `link_join_keys()`); objectSetsR no longer reads
+  `$source` fields on properties, and the `source$name` fallback is gone
+  (`as_bundle()` maps it, with a warning).
+* Requires ontologySpecR >= 0.2.1.
+
 # objectSetsR 0.2.0
 
 ## Breaking changes

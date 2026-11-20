@@ -64,22 +64,14 @@ os_type_def <- function(os) {
   rlang::abort(paste0("Unknown object type: ", id))
 }
 
-object_properties <- function(object_type) {
-  props <- object_type$properties
-  if (is.null(props)) {
-    rlang::abort(paste0("Object type ", object_type$id, " has no properties."))
-  }
-  props
-}
-
 # Where an object type's rows live: a (possibly schema-qualified) table, or the
 # defining SQL for query-backed types.
 object_backing <- function(object_type) {
-  source <- ontologySpecR::object_source(object_type)
-  if (is.null(source)) {
+  src <- ontologySpecR::object_source(object_type)
+  if (is.null(src)) {
     rlang::abort(paste0("Object type ", object_type$id, " has no source binding."))
   }
-  if (identical(source$kind, "query")) {
+  if (identical(src$kind, "query")) {
     sql <- ontologySpecR::object_source_sql(object_type)
     if (is.null(sql)) {
       rlang::abort(paste0("Object type ", object_type$id, " is query-backed but has no source SQL."))
@@ -87,23 +79,14 @@ object_backing <- function(object_type) {
     return(list(kind = "query", sql = sql))
   }
   table <- ontologySpecR::object_table(object_type)
-  if (!is.null(source$schema)) {
-    table <- DBI::Id(schema = source$schema, table = table)
+  if (!is.null(src$schema)) {
+    table <- DBI::Id(schema = src$schema, table = table)
   }
   list(kind = "table", table = table)
 }
 
-property_source_expr <- function(property) {
-  source <- property$source %||% list()
-  list(column = source$column %||% property$id, expression = source$expression)
-}
-
-property_ids <- function(object_type) {
-  ontologySpecR::object_property_ids(object_type)
-}
-
 validate_property_ids <- function(object_type, symbols) {
-  props <- property_ids(object_type)
+  props <- ontologySpecR::object_property_ids(object_type)
   missing <- setdiff(symbols, props)
   if (length(missing) > 0) {
     rlang::abort(
@@ -234,9 +217,8 @@ check_implements <- function(object_type, interface, bundle = NULL, error = TRUE
   iface_id <- interface$id
 
   # Object type property ids and their definitions
-  ot_props <- object_properties(object_type)
-  ot_prop_ids <- vapply(ot_props, `[[`, character(1), "id")
-  ot_props_by_id <- stats::setNames(ot_props, ot_prop_ids)
+  ot_props_by_id <- ontologySpecR::object_properties(object_type)
+  ot_prop_ids <- names(ot_props_by_id)
 
   # Required properties from the interface
   req_props <- interface$requiredProperties
@@ -392,18 +374,19 @@ build_object_tbl <- function(ctx, object_type) {
   } else {
     dplyr::tbl(con, backing$table)
   }
-  props <- object_properties(object_type)
-  prop_ids <- vapply(props, `[[`, character(1), "id")
+  props <- ontologySpecR::object_properties(object_type)
+  prop_ids <- names(props)
   # Only mutate properties that need renaming or computation.
   # Skip identity mappings (column == id) to avoid self-referential
   # expressions that cause infinite recursion in dbplyr.
   exprs <- list()
   for (prop in props) {
-    mapping <- property_source_expr(prop)
-    if (!is.null(mapping$expression)) {
-      exprs[[prop$id]] <- dbplyr::sql(mapping$expression)
-    } else if (mapping$column != prop$id) {
-      exprs[[prop$id]] <- rlang::sym(mapping$column)
+    expression <- ontologySpecR::property_expression(prop)
+    column <- ontologySpecR::property_column(prop)
+    if (!is.null(expression)) {
+      exprs[[prop$id]] <- dbplyr::sql(expression)
+    } else if (column != prop$id) {
+      exprs[[prop$id]] <- rlang::sym(column)
     }
   }
   if (length(exprs) > 0) {

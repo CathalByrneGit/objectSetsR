@@ -234,22 +234,185 @@ test_that("traversal is unaffected by vertexR being installed", {
 
 # ---- os_to_graph ----
 
-test_that("os_to_graph builds a tidygraph from context", {
+test_that("os_to_graph edges are exactly the source-object -> target-object pairs", {
   skip_if_not_installed("tidygraph")
   con <- setup_duckdb()
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
   ctx <- ontology_context(make_bundle(), con)
-  g <- os_to_graph(ctx, c("Airport", "FlightRoute"), c("RouteOrigin"))
+
+  g <- os_to_graph(ctx, c("Airport", "FlightRoute"), "RouteOrigin")
   expect_s3_class(g, "tbl_graph")
-  nodes <- tidygraph::as_tibble(g, active = "nodes")
+
+  # setup_duckdb(): R1 departs DUB, R2 departs JFK. Edges run route -> airport.
+  expect_equal(
+    graph_edge_keys(g),
+    expected_edges(
+      from = c("FlightRoute::R1", "FlightRoute::R2"),
+      to = c("Airport::DUB", "Airport::JFK")
+    )
+  )
+
+  g2 <- os_to_graph(ctx, c("Airport", "FlightRoute"),
+                    c("RouteOrigin", "RouteDestination"))
+  # R1 arrives JFK, R2 arrives DUB.
+  expect_equal(
+    graph_edge_keys(g2),
+    expected_edges(
+      from = c("FlightRoute::R1", "FlightRoute::R2",
+               "FlightRoute::R1", "FlightRoute::R2"),
+      to = c("Airport::DUB", "Airport::JFK", "Airport::JFK", "Airport::DUB")
+    )
+  )
+  expect_equal(
+    sort(tidygraph::as_tibble(g, active = "edges")$link_type),
+    c("RouteOrigin", "RouteOrigin")
+  )
+})
+
+test_that("os_to_graph has no self-loops and edge endpoints have the right types", {
+  skip_if_not_installed("tidygraph")
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  ctx <- ontology_context(make_bundle(), con)
+  g <- os_to_graph(ctx, c("Airport", "FlightRoute"), "RouteOrigin")
+
   edges <- tidygraph::as_tibble(g, active = "edges")
-  # Should have Airport + FlightRoute nodes
-  expect_true("Airport" %in% nodes$.object_type)
-  expect_true("FlightRoute" %in% nodes$.object_type)
-  # Should have edges for RouteOrigin link
-  expect_true(nrow(edges) > 0)
-  expect_true("link_type" %in% names(edges))
-  expect_equal(unique(edges$link_type), "RouteOrigin")
+  expect_false(any(edges$from == edges$to))
+
+  link <- ctx$link_types[["RouteOrigin"]]
+  types <- graph_node_types(g)
+  expect_true(all(types$from == link$from))
+  expect_true(all(types$to == link$to))
+})
+
+test_that("os_to_graph keeps same-valued keys on different types apart", {
+  skip_if_not_installed("tidygraph")
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  # Airport "1" and FlightRoute "1" share a primary key value.
+  DBI::dbWriteTable(con, "airports", data.frame(
+    airport_id = c("1", "2"), country = c("A", "B"), name = c("One", "Two")
+  ))
+  DBI::dbWriteTable(con, "routes", data.frame(
+    route_id = c("1", "2"), origin_id = c("2", "1"),
+    destination_id = c("1", "2"), stops = c(0L, 0L)
+  ))
+  ctx <- ontology_context(make_bundle(), con)
+  g <- os_to_graph(ctx, c("Airport", "FlightRoute"), "RouteOrigin")
+
+  nodes <- tidygraph::as_tibble(g, active = "nodes")
+  expect_equal(nrow(nodes), 4)
+  expect_equal(anyDuplicated(nodes$.node_key), 0L)
+  expect_equal(
+    graph_edge_keys(g),
+    expected_edges(
+      from = c("FlightRoute::1", "FlightRoute::2"),
+      to = c("Airport::2", "Airport::1")
+    )
+  )
+})
+
+test_that("os_to_graph handles a link whose two sides use the same column name", {
+  skip_if_not_installed("tidygraph")
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  DBI::dbWriteTable(con, "flights", data.frame(
+    flight_id = c("F1", "F2", "F3"), airport_id = c("DUB", "DUB", "JFK")
+  ))
+  flight <- ontologySpecR::object_type(
+    id = "Flight",
+    properties = list(
+      ontologySpecR::property_def("flight_id", "string", nullable = FALSE),
+      ontologySpecR::property_def("airport_id", "string")
+    ),
+    primary_key = "flight_id",
+    source_kind = "table", source_table = "flights"
+  )
+  link <- ontologySpecR::link_type(
+    "FlightAirport", from = "Flight", to = "Airport",
+    join_from_keys = "airport_id", join_to_keys = "airport_id"
+  )
+  ctx <- ontology_context(
+    make_bundle(objects = list(airport_type(), flight), links = list(link)), con
+  )
+  g <- os_to_graph(ctx, c("Airport", "Flight"), "FlightAirport")
+  expect_equal(
+    graph_edge_keys(g),
+    expected_edges(
+      from = c("Flight::F1", "Flight::F2", "Flight::F3"),
+      to = c("Airport::DUB", "Airport::DUB", "Airport::JFK")
+    )
+  )
+})
+
+test_that("os_to_graph works with a composite primary key on the source type", {
+  skip_if_not_installed("tidygraph")
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  DBI::dbWriteTable(con, "legs", data.frame(
+    flight_no = c("AB1", "AB1", "CD2"),
+    leg_no = c(1L, 10L, 1L),
+    dest_id = c("DUB", "JFK", "DUB"),
+    stringsAsFactors = FALSE
+  ))
+  leg <- ontologySpecR::object_type(
+    id = "Leg",
+    properties = list(
+      ontologySpecR::property_def("flight_no", "string", nullable = FALSE),
+      ontologySpecR::property_def("leg_no", "integer", nullable = FALSE),
+      ontologySpecR::property_def("dest_id", "string")
+    ),
+    primary_key = c("flight_no", "leg_no"),
+    source_kind = "table", source_table = "legs"
+  )
+  link <- ontologySpecR::link_type(
+    "LegDest", from = "Leg", to = "Airport",
+    join_from_keys = "dest_id", join_to_keys = "airport_id"
+  )
+  ctx <- ontology_context(
+    make_bundle(objects = list(airport_type(), leg), links = list(link)), con
+  )
+  g <- os_to_graph(ctx, c("Airport", "Leg"), "LegDest")
+  expect_equal(
+    graph_edge_keys(g),
+    expected_edges(
+      from = c("Leg::AB1|1", "Leg::AB1|10", "Leg::CD2|1"),
+      to = c("Airport::DUB", "Airport::JFK", "Airport::DUB")
+    )
+  )
+})
+
+test_that("os_to_graph drops edges to unrequested types with one warning", {
+  skip_if_not_installed("tidygraph")
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  ctx <- ontology_context(make_bundle(), con)
+
+  # Airport is not requested, so both RouteOrigin edges lose their target.
+  warnings <- character()
+  g <- withCallingHandlers(
+    os_to_graph(ctx, "FlightRoute", "RouteOrigin"),
+    warning = function(w) {
+      warnings <<- c(warnings, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    }
+  )
+  expect_length(warnings, 1)
+  expect_match(warnings, "Link 'RouteOrigin': dropped 2 edges", fixed = TRUE)
+  expect_equal(nrow(tidygraph::as_tibble(g, active = "edges")), 0)
+  expect_equal(nrow(tidygraph::as_tibble(g, active = "nodes")), 2)
+})
+
+test_that("os_to_graph rejects links whose join keys are not properties", {
+  skip_if_not_installed("tidygraph")
+  con <- setup_duckdb()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  bad <- ontologySpecR::link_type(
+    "Bad", from = "FlightRoute", to = "Airport",
+    join_from_keys = "no_such_col", join_to_keys = "airport_id"
+  )
+  ctx <- ontology_context(make_bundle(links = list(bad)), con)
+  expect_error(os_to_graph(ctx, c("Airport", "FlightRoute"), "Bad"), "Unknown property")
 })
 
 # ---- Error paths ----

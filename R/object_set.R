@@ -11,7 +11,7 @@
 object_set <- function(ctx, object_type_id) {
   object_type <- get_object_type(ctx, object_type_id)
   tbl <- build_object_tbl(ctx, object_type)
-  props <- property_ids(object_type)
+  props <- ontologySpecR::object_property_ids(object_type)
   os_new(ctx, object_type_id, tbl, props)
 }
 
@@ -101,35 +101,6 @@ os_select <- function(os, ...) {
   os_new(os$ctx, os$object_type_id, tbl, props)
 }
 
-as_chr_vec <- function(x, arg = deparse(substitute(x))) {
-  if (is.null(x)) return(NULL)
-  
-  if (is.list(x)) {
-    x <- unlist(x, use.names = FALSE)
-  }
-  
-  x <- as.character(x)
-  
-  if (length(x) == 0L || anyNA(x)) {
-    rlang::abort(paste0("`", arg, "` must be a non-empty character vector."))
-  }
-  
-  x
-}
-
-# Join keys of a link type as plain character vectors. The spec stores them as
-# `join$fromKeys` / `join$toKeys` (lists of property ids); `as_chr_vec()` only
-# flattens that list, it does not guess at alternative spellings.
-link_join_keys <- function(link) {
-  from_keys <- as_chr_vec(link$join$fromKeys, "join$fromKeys")
-  to_keys   <- as_chr_vec(link$join$toKeys,   "join$toKeys")
-  if (is.null(from_keys) || is.null(to_keys)) {
-    rlang::abort(paste0("Link ", link$id, " is missing join keys."))
-  }
-  list(from = from_keys, to = to_keys)
-}
-
-
 #' Traverse a link to a target object type
 #'
 #' @param os An \code{ObjectSet}.
@@ -149,7 +120,7 @@ os_traverse <- function(os, link_type_id) {
   target_type <- get_object_type(os$ctx, link$to)
   target_tbl <- build_object_tbl(os$ctx, target_type)
 
-  keys <- link_join_keys(link)
+  keys <- ontologySpecR::link_join_keys(link)
   validate_property_ids(source_type, keys$from)
   validate_property_ids(target_type, keys$to)
 
@@ -163,7 +134,7 @@ os_traverse <- function(os, link_type_id) {
     keep = TRUE
   )
   
-  target_props <- property_ids(target_type)
+  target_props <- ontologySpecR::object_property_ids(target_type)
   
   # Resolve and select the target columns from the joined result
   selections <- resolve_target_columns(joined, target_props)
@@ -187,10 +158,10 @@ os_search_around <- function(os, link_type_id) {
   }
   source_type <- get_object_type(os$ctx, link$from)
   source_tbl <- build_object_tbl(os$ctx, source_type)
-  keys <- link_join_keys(link)
+  keys <- ontologySpecR::link_join_keys(link)
   by <- stats::setNames(keys$from, keys$to)
   joined <- dplyr::inner_join(os$tbl, source_tbl, by = by, suffix = c(".to", ".from"), keep = TRUE)
-  source_props <- property_ids(source_type)
+  source_props <- ontologySpecR::object_property_ids(source_type)
   selections <- resolve_target_columns(joined, source_props, suffix = ".from")
   tbl <- dplyr::select(joined, !!!selections)
   os_new(os$ctx, source_type$id, tbl, source_props)
@@ -358,6 +329,15 @@ os_show_query <- function(os) {
 
 #' Materialize a subgraph as a tidygraph graph
 #'
+#' Nodes are the rows of the requested object types, keyed
+#' \code{"<ObjectType>::<primary key>"} so identical key values on different
+#' types stay distinct. Each link type contributes one edge per joined row,
+#' running from the source object (\code{link$from}) to the target object
+#' (\code{link$to}), both identified by their primary keys.
+#'
+#' Edges whose source or target type is not in \code{object_type_ids} are
+#' dropped, with one warning per link naming how many.
+#'
 #' @param ctx An \code{OntologyContext}.
 #' @param object_type_ids Character vector of object type identifiers.
 #' @param link_type_ids Character vector of link type identifiers.
@@ -372,44 +352,66 @@ os_to_graph <- function(ctx, object_type_ids, link_type_ids) {
   for (object_type_id in object_type_ids) {
     object_type <- get_object_type(ctx, object_type_id)
     pk_cols <- ontologySpecR::object_pk(object_type)
-    tbl <- build_object_tbl(ctx, object_type)
-    nodes <- dplyr::select(tbl, dplyr::all_of(pk_cols))
+    nodes <- dplyr::select(build_object_tbl(ctx, object_type), dplyr::all_of(pk_cols))
     nodes <- dplyr::collect(nodes)
-    key <- compose_node_key(nodes)
     node_frames[[object_type_id]] <- dplyr::mutate(
       nodes,
       .object_type = object_type_id,
-      .node_key = key
+      .node_key = graph_node_key(object_type_id, nodes[pk_cols])
     )
   }
   nodes_df <- dplyr::bind_rows(node_frames)
   node_index <- stats::setNames(seq_len(nrow(nodes_df)), nodes_df$.node_key)
+
   edge_frames <- list()
   for (link_type_id in link_type_ids) {
     link <- get_link_type(ctx, link_type_id)
-    from_type <- get_object_type(ctx, link$from)
-    to_type <- get_object_type(ctx, link$to)
-    keys <- link_join_keys(link)
-    from_keys <- keys$from
-    to_keys <- keys$to
-    from_tbl <- build_object_tbl(ctx, from_type)
-    to_tbl <- build_object_tbl(ctx, to_type)
-    by <- stats::setNames(to_keys, from_keys)
+    ends <- ontologySpecR::link_endpoints(link)
+    from_type <- get_object_type(ctx, ends$from)
+    to_type <- get_object_type(ctx, ends$to)
+    keys <- ontologySpecR::link_join_keys(link)
+    validate_property_ids(from_type, keys$from)
+    validate_property_ids(to_type, keys$to)
+    from_pk <- ontologySpecR::object_pk(from_type)
+    to_pk <- ontologySpecR::object_pk(to_type)
+
+    # Prefix every selected column by side (.f_ / .t_) so the two tables can
+    # never clash, whatever the join columns are called.
+    side_select <- function(object_type, cols, prefix) {
+      cols <- unique(cols)
+      dplyr::select(
+        build_object_tbl(ctx, object_type),
+        dplyr::all_of(stats::setNames(cols, paste0(prefix, cols)))
+      )
+    }
     joined <- dplyr::inner_join(
-      dplyr::select(from_tbl, dplyr::all_of(from_keys)),
-      dplyr::select(to_tbl, dplyr::all_of(to_keys)),
-      by = by,
+      side_select(from_type, c(from_pk, keys$from), ".f_"),
+      side_select(to_type, c(to_pk, keys$to), ".t_"),
+      by = stats::setNames(paste0(".t_", keys$to), paste0(".f_", keys$from)),
       keep = TRUE
     )
     edge_df <- dplyr::collect(joined)
-    from_key <- compose_node_key(edge_df[from_keys])
-    to_key <- compose_node_key(edge_df[to_keys])
-    edge_frames[[link_type_id]] <- data.frame(
-      from = node_index[from_key],
-      to = node_index[to_key],
-      link_type = link_type_id,
+
+    # Endpoints are the objects themselves (their primary keys), not the join
+    # column values.
+    from_key <- graph_node_key(ends$from, edge_df[paste0(".f_", from_pk)])
+    to_key <- graph_node_key(ends$to, edge_df[paste0(".t_", to_pk)])
+    edges <- data.frame(
+      from = unname(node_index[from_key]),
+      to = unname(node_index[to_key]),
+      link_type = rep(link_type_id, length(from_key)),
       stringsAsFactors = FALSE
     )
+    dangling <- is.na(edges$from) | is.na(edges$to)
+    if (any(dangling)) {
+      rlang::warn(sprintf(
+        "Link '%s': dropped %d edge%s whose endpoint type (%s -> %s) is not in `object_type_ids`.",
+        link_type_id, sum(dangling), if (sum(dangling) == 1) "" else "s",
+        ends$from, ends$to
+      ))
+      edges <- edges[!dangling, , drop = FALSE]
+    }
+    edge_frames[[link_type_id]] <- edges
   }
   edges_df <- dplyr::bind_rows(edge_frames)
   tidygraph::tbl_graph(nodes = nodes_df, edges = edges_df, directed = TRUE)
