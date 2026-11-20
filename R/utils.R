@@ -67,3 +67,25 @@ compose_node_key <- function(values) {
 graph_node_key <- function(object_type_id, pk_values) {
   paste0(object_type_id, "::", compose_node_key(pk_values))
 }
+
+# vertexR is optional (Suggests). Resolve one of its exported functions, failing
+# with a clear message if the package is missing or too old to provide it,
+# rather than a bare "not an exported object" from `::`.
+vertexr_fn <- function(name, pkg = "vertexR") {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    rlang::abort(sprintf("os_traverse_deep() requires the %s package.", pkg))
+  }
+  tryCatch(
+    getExportedValue(pkg, name),
+    error = function(e) {
+      rlang::abort(sprintf(
+        "The installed %s does not provide `%s()`; update it to a version with the DuckPGQ backend.",
+        pkg, name
+      ))
+    }
+  )
+}
+
+is_duckdb_connection <- function(con) {
+  inherits(con, "duckdb_connection")
+}

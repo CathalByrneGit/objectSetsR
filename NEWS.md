@@ -1,3 +1,20 @@
+# objectSetsR 0.3.0
+
+* `os_traverse_deep()` is back, rewritten against vertexR's actual DuckPGQ API
+  (`vx_pgq_available(connection)`, `vx_pgq_graph_name()`,
+  `vx_pgq_graph_exists(connection, graph_name)`,
+  `vx_pgq_setup(bundle, connection, graph_name)` and
+  `vx_pgq_neighbors(connection, graph_name, source_type, source_ids,
+  link_type, target_type, depth, direction)`). It follows a link 1-N hops
+  (`depth = c(min_hops, max_hops)`), forward, reverse or both, and needs a
+  DuckDB connection, DuckPGQ and vertexR; use `os_traverse()` for one hop on any
+  backend. A missing or too-old vertexR now gives a clear error naming the
+  missing function.
+* There is no `include_path` / `path_length`: vertexR cannot report hop counts
+  for quantified paths.
+* vertexR is back in Suggests (and Remotes); testthat >= 3.1.7 is needed for the
+  mocked-vertexR tests.
+
 # objectSetsR 0.2.1
 
 * Fixed `os_to_graph()` producing self-loops and wrong endpoints. Edges now run

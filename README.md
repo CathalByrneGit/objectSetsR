@@ -66,6 +66,7 @@ legacy keys (`objectTypes`, `table_name`, ...) are still accepted but
 | `os_select(os, ...)` | Select specific properties |
 | `os_traverse(os, link_id)` | Follow a link to target type |
 | `os_search_around(os, link_id)` | Reverse traversal (target to source) |
+| `os_traverse_deep(os, link_id, min_hops, max_hops)` | Multi-hop traversal (DuckDB + DuckPGQ + vertexR) |
 | `os_union(os1, os2)` | Set union |
 | `os_intersect(os1, os2)` | Set intersection |
 | `os_distinct(os)` | Remove duplicate rows |
@@ -75,6 +76,23 @@ legacy keys (`objectTypes`, `table_name`, ...) are still accepted but
 | `os_collect(os)` | Materialize to data frame |
 | `os_show_query(os)` | Render SQL string |
 | `os_to_graph(ctx, types, links)` | Materialize as tidygraph |
+
+## Multi-hop traversal
+
+`os_traverse()` is a single SQL join and works on any DBI backend.
+`os_traverse_deep()` follows a link 1-N hops inside DuckDB using DuckPGQ via
+the optional `vertexR` package, and returns every reachable object of the
+destination type:
+
+```r
+reachable <- object_set(ctx, "FlightRoute") |>
+  os_filter(stops == 0L) |>
+  os_traverse_deep("RouteOrigin", min_hops = 1, max_hops = 3)
+```
+
+If the bundle's property graph doesn't exist yet it is created with
+`vertexR::vx_pgq_setup()` (a message says so). Primary keys must be single
+columns.
 
 ## Interface-aware queries
 
