@@ -143,6 +143,146 @@ os_traverse <- function(os, link_type_id) {
   os_new(os$ctx, target_type$id, tbl, target_props)
 }
 
+#' Multi-hop traversal using DuckPGQ
+#'
+#' Follows a link type 1 to N hops from the current object set and returns
+#' every object of the destination type reachable within that range. The
+#' traversal runs inside DuckDB through the DuckPGQ extension, via
+#' \pkg{vertexR}.
+#'
+#' Use \code{os_traverse()} for a single hop: it is a plain SQL join that works
+#' on any DBI backend. Use \code{os_traverse_deep()} for 1-N hops; it needs a
+#' DuckDB connection, the DuckPGQ extension, and the \pkg{vertexR} package
+#' (a version providing \code{vx_pgq_neighbors()}).
+#'
+#' If the bundle's property graph does not exist yet it is created with
+#' \code{vertexR::vx_pgq_setup()}, which installs/loads DuckPGQ and creates (or
+#' replaces) a property graph, plus views for query-backed object types, in the
+#' connected database. A message is emitted when that happens. The graph is
+#' built from the whole bundle, and DuckPGQ supports single-column primary keys
+#' only.
+#'
+#' vertexR does not report hop counts for quantified paths, so there is no
+#' \code{path_length} column.
+#'
+#' @param os An \code{ObjectSet}.
+#' @param link_type_id Character. The link type to traverse.
+#' @param min_hops Integer. Minimum number of hops. Default 1.
+#' @param max_hops Integer. Maximum number of hops. Default 3.
+#' @param direction One of \code{"forward"} (from the link's source type to its
+#'   target type), \code{"reverse"} (the other way), or \code{"both"} (either
+#'   way; the result is the type at the other end of the link).
+#'
+#' @return An \code{ObjectSet} of the destination type.
+#' @export
+os_traverse_deep <- function(os, link_type_id,
+                             min_hops = 1L, max_hops = 3L,
+                             direction = c("forward", "reverse", "both")) {
+  ensure_object_set(os)
+  direction <- match.arg(direction)
+  min_hops <- as.integer(min_hops)
+  max_hops <- as.integer(max_hops)
+  if (length(min_hops) != 1L || is.na(min_hops) || min_hops < 1L) {
+    rlang::abort("`min_hops` must be a single integer >= 1.")
+  }
+  if (length(max_hops) != 1L || is.na(max_hops) || max_hops < min_hops) {
+    rlang::abort("`max_hops` must be a single integer >= `min_hops`.")
+  }
+
+  # Which type is at the other end of the link?
+  link <- get_link_type(os$ctx, link_type_id)
+  ends <- ontologySpecR::link_endpoints(link)
+  source_type_id <- os$object_type_id
+  target_type_id <- switch(
+    direction,
+    forward = {
+      if (ends$from != source_type_id) {
+        rlang::abort(paste0("Link ", link$id, " does not originate from ", source_type_id, "."))
+      }
+      ends$to
+    },
+    reverse = {
+      if (ends$to != source_type_id) {
+        rlang::abort(paste0("Link ", link$id, " does not point to ", source_type_id, "."))
+      }
+      ends$from
+    },
+    both = {
+      if (source_type_id == ends$from) {
+        ends$to
+      } else if (source_type_id == ends$to) {
+        ends$from
+      } else {
+        rlang::abort(paste0("Link ", link$id, " does not touch ", source_type_id, "."))
+      }
+    }
+  )
+
+  source_type <- get_object_type(os$ctx, source_type_id)
+  target_type <- get_object_type(os$ctx, target_type_id)
+  source_pk <- ontologySpecR::object_pk(source_type)
+  target_pk <- ontologySpecR::object_pk(target_type)
+  if (length(source_pk) != 1L || length(target_pk) != 1L) {
+    rlang::abort("os_traverse_deep() supports single-column primary keys only (DuckPGQ backend).")
+  }
+
+  con <- os$ctx$connection
+  if (!is_duckdb_connection(con)) {
+    rlang::abort(
+      "os_traverse_deep() requires a DuckDB connection. Use os_traverse() for single-hop traversal on other backends."
+    )
+  }
+  available <- vertexr_fn("vx_pgq_available")
+  graph_name_fn <- vertexr_fn("vx_pgq_graph_name")
+  graph_exists <- vertexr_fn("vx_pgq_graph_exists")
+  setup <- vertexr_fn("vx_pgq_setup")
+  neighbors <- vertexr_fn("vx_pgq_neighbors")
+
+  if (!isTRUE(available(con))) {
+    rlang::abort(
+      "os_traverse_deep() requires DuckPGQ. Use os_traverse() for single-hop traversal or install DuckPGQ."
+    )
+  }
+
+  graph_name <- graph_name_fn(os$ctx$spec)
+  if (!isTRUE(graph_exists(con, graph_name))) {
+    rlang::inform(sprintf("Property graph '%s' not found; creating it from the bundle.", graph_name))
+    setup(os$ctx$spec, con, graph_name = graph_name)
+  }
+
+  empty_target <- function() {
+    tbl <- dplyr::filter(build_object_tbl(os$ctx, target_type), FALSE)
+    os_new(os$ctx, target_type_id, tbl, ontologySpecR::object_property_ids(target_type))
+  }
+
+  # Seeds: the current set's primary keys. Collected (not pushed down) because
+  # vertexR takes them as a vector.
+  seeds <- dplyr::collect(dplyr::select(os$tbl, dplyr::all_of(source_pk)))[[source_pk]]
+  seed_ids <- unique(as.character(seeds[!is.na(seeds)]))
+  if (length(seed_ids) == 0L) {
+    return(empty_target())
+  }
+
+  # vertexR's graph exposes each primary key as `node_id` (see vx_pgq_setup()),
+  # so source_pk / target_pk are left at vertexR's default.
+  found <- neighbors(
+    connection = con,
+    graph_name = graph_name,
+    source_type = source_type_id,
+    source_ids = seed_ids,
+    link_type = link_type_id,
+    target_type = target_type_id,
+    depth = c(min_hops, max_hops),
+    direction = direction
+  )
+  target_ids <- unique(found$target_id)
+  if (length(target_ids) == 0L) {
+    return(empty_target())
+  }
+
+  os_filter(object_set(os$ctx, target_type_id), !!rlang::sym(target_pk) %in% !!target_ids)
+}
+
 #' Traverse a link in reverse
 #'
 #' @param os An \code{ObjectSet}.
