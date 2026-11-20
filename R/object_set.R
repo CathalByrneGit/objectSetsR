@@ -11,7 +11,7 @@
 object_set <- function(ctx, object_type_id) {
   object_type <- get_object_type(ctx, object_type_id)
   tbl <- build_object_tbl(ctx, object_type)
-  props <- property_ids(object_type)
+  props <- ontologySpecR::object_property_ids(object_type)
   os_new(ctx, object_type_id, tbl, props)
 }
 
@@ -65,7 +65,7 @@ os_filter <- function(os, ...) {
   
   quos <- rlang::enquos(...)
   
-  object_type <- get_object_type(os$ctx, os$object_type_id)
+  object_type <- os_type_def(os)
   validate_filter_exprs(object_type, quos)
   
   # Splice the quosures into filter():
@@ -85,7 +85,7 @@ os_filter <- function(os, ...) {
 os_select <- function(os, ...) {
   ensure_object_set(os)
   quos <- rlang::enquos(...)
-  object_type <- get_object_type(os$ctx, os$object_type_id)
+  object_type <- os_type_def(os)
   symbols <- unique(unlist(lapply(quos, function(q) {
     expr <- rlang::get_expr(q)
     if (rlang::is_symbol(expr)) {
@@ -100,23 +100,6 @@ os_select <- function(os, ...) {
   props <- dplyr::tbl_vars(tbl)
   os_new(os$ctx, os$object_type_id, tbl, props)
 }
-
-as_chr_vec <- function(x, arg = deparse(substitute(x))) {
-  if (is.null(x)) return(NULL)
-  
-  if (is.list(x)) {
-    x <- unlist(x, use.names = FALSE)
-  }
-  
-  x <- as.character(x)
-  
-  if (length(x) == 0L || anyNA(x)) {
-    rlang::abort(paste0("`", arg, "` must be a non-empty character vector."))
-  }
-  
-  x
-}
-
 
 #' Traverse a link to a target object type
 #'
@@ -137,19 +120,12 @@ os_traverse <- function(os, link_type_id) {
   target_type <- get_object_type(os$ctx, link$to)
   target_tbl <- build_object_tbl(os$ctx, target_type)
 
-  join <- link$join %||% list()
-  from_keys <- as_chr_vec(join$fromKeys %||% join$from_keys, "join$fromKeys")
-  to_keys   <- as_chr_vec(join$toKeys   %||% join$to_keys,   "join$toKeys")
+  keys <- ontologySpecR::link_join_keys(link)
+  validate_property_ids(source_type, keys$from)
+  validate_property_ids(target_type, keys$to)
 
-  validate_property_ids(source_type, from_keys)
-  validate_property_ids(target_type, to_keys)
-  
-  if (is.null(from_keys) || is.null(to_keys)) {
-    rlang::abort(paste0("Link ", link$id, " is missing join keys."))
-  }
-  
-  by <- stats::setNames(to_keys, from_keys)
-  
+  by <- stats::setNames(keys$to, keys$from)
+
   joined <- dplyr::inner_join(
     os$tbl,
     target_tbl,
@@ -158,7 +134,7 @@ os_traverse <- function(os, link_type_id) {
     keep = TRUE
   )
   
-  target_props <- property_ids(target_type)
+  target_props <- ontologySpecR::object_property_ids(target_type)
   
   # Resolve and select the target columns from the joined result
   selections <- resolve_target_columns(joined, target_props)
@@ -166,161 +142,6 @@ os_traverse <- function(os, link_type_id) {
   
   os_new(os$ctx, target_type$id, tbl, target_props)
 }
-
-#' Multi-hop traversal using DuckPGQ
-#'
-#' Follows a link type 1 to N hops from the current object set, returning all
-#' reachable destination objects. Requires DuckPGQ to be loaded in the
-#' connection (DuckDB only).
-#'
-#' @param os An \code{ObjectSet}.
-#' @param link_type_id Character. The link type to traverse.
-#' @param min_hops Integer. Minimum number of hops. Default 1.
-#' @param max_hops Integer. Maximum number of hops. Default 3.
-#' @param direction One of "forward", "reverse", "both". Default "forward".
-#' @param include_path Logical. If TRUE, include a path_length column. Default FALSE.
-#'
-#' @details
-#' Use \code{os_traverse()} for single-hop traversal (pure SQL JOIN, works on
-#' any DBI backend). Use \code{os_traverse_deep()} for multi-hop traversal
-#' (1-N hops, requires DuckPGQ/DuckDB only).
-#'
-#' @return An \code{ObjectSet} of the destination type containing all objects
-#'   reachable within the specified hop range.
-#' @export
-os_traverse_deep <- function(os, link_type_id,
-                              min_hops = 1L, max_hops = 3L,
-                              direction = c("forward", "reverse", "both"),
-                              include_path = FALSE) {
-  ensure_object_set(os)
-  direction <- match.arg(direction)
-  min_hops <- as.integer(min_hops)
-  max_hops <- as.integer(max_hops)
-
-  if (min_hops < 1L) {
-    rlang::abort("`min_hops` must be at least 1.")
-  }
-  if (max_hops < min_hops) {
-    rlang::abort("`max_hops` must be >= `min_hops`.")
-  }
-
-  # Check for DuckDB connection
- con <- os$ctx$connection
-  if (!inherits(con, "duckdb_connection")) {
-    rlang::abort(
-      "os_traverse_deep() requires a DuckDB connection. Use os_traverse() for single-hop traversal on other backends."
-    )
-  }
-
-  # Check for vertexR package
-  if (!requireNamespace("vertexR", quietly = TRUE)) {
-    rlang::abort(
-      "os_traverse_deep() requires the {vertexR} package. Install it with: install.packages('vertexR')"
-    )
-  }
-
-  # Check DuckPGQ availability
-  if (!vertexR::vx_pgq_available(con)) {
-    rlang::abort(
-      "os_traverse_deep() requires DuckPGQ. Use os_traverse() for single-hop traversal or install DuckPGQ."
-    )
-  }
-
-  # Verify/create property graph
-  graph_name <- vertexR::vx_pgq_graph_name(os$ctx$bundle)
-  if (!vertexR::vx_pgq_graph_exists(con, graph_name)) {
-    message(sprintf("Property graph '%s' not found. Creating it now...", graph_name))
-    vertexR::vx_pgq_setup(os$ctx$bundle, con)
-  }
-
-  # Get link type and determine target
-  link <- get_link_type(os$ctx, link_type_id)
-  target_type_id <- switch(
-    direction,
-    forward = link$to,
-    reverse = link$from,
-    both = link$to  # For "both", we return the "to" type
-  )
-
-  # Get primary key for the source object type
-  source_type <- get_object_type(os$ctx, os$object_type_id)
-  source_pk <- object_primary_key(source_type)
-
-  # Collect seed IDs from current object set
-  seeds <- os |>
-    os_select(!!!rlang::syms(source_pk)) |>
-    os_collect()
-
-  if (nrow(seeds) == 0) {
-    # Empty seed set - return empty ObjectSet of target type
-    target_type <- get_object_type(os$ctx, target_type_id)
-    target_tbl <- build_object_tbl(os$ctx, target_type)
-    target_tbl <- dplyr::filter(target_tbl, FALSE)
-    return(os_new(os$ctx, target_type_id, target_tbl, property_ids(target_type)))
-  }
-
-  seed_ids <- if (length(source_pk) == 1) {
-    seeds[[source_pk]]
-  } else {
-    apply(seeds, 1, function(row) paste(row, collapse = "|"))
-  }
-
-  # Call vertexR for deep traversal
-  result <- vertexR::vx_pgq_neighbors(
-    con = con,
-    graph_name = graph_name,
-    seed_ids = seed_ids,
-    link_type_id = link_type_id,
-    min_hops = min_hops,
-    max_hops = max_hops,
-    direction = direction
-  )
-
-  if (nrow(result) == 0) {
-    # No results - return empty ObjectSet
-    target_type <- get_object_type(os$ctx, target_type_id)
-    target_tbl <- build_object_tbl(os$ctx, target_type)
-    target_tbl <- dplyr::filter(target_tbl, FALSE)
-    return(os_new(os$ctx, target_type_id, target_tbl, property_ids(target_type)))
-  }
-
-  # Get target type and its primary key
-  target_type <- get_object_type(os$ctx, target_type_id)
-  target_pk <- object_primary_key(target_type)
-  target_ids <- result$target_id
-
-  # Build ObjectSet filtered to reachable target IDs
-  target_os <- object_set(os$ctx, target_type_id)
-
-  if (length(target_pk) == 1) {
-    # Single-column PK - simple IN filter
-    target_os <- os_filter(target_os, !!rlang::sym(target_pk) %in% !!target_ids)
-  } else {
-    # Multi-column PK - need to parse composite keys
-    rlang::abort("Multi-column primary keys not yet supported in os_traverse_deep().")
-  }
-
-  # Add path_length column if requested
-  if (include_path && "path_length" %in% names(result)) {
-    # Create a lookup table and join
-    path_df <- data.frame(
-      target_id = result$target_id,
-      path_length = result$path_length,
-      stringsAsFactors = FALSE
-    )
-    names(path_df)[1] <- target_pk
-    path_tbl <- dplyr::copy_to(con, path_df, name = "path_lengths", overwrite = TRUE)
-    target_os$tbl <- dplyr::left_join(
-      target_os$tbl,
-      path_tbl,
-      by = target_pk
-    )
-    target_os$properties <- c(target_os$properties, "path_length")
-  }
-
-  target_os
-}
-
 
 #' Traverse a link in reverse
 #'
@@ -337,15 +158,10 @@ os_search_around <- function(os, link_type_id) {
   }
   source_type <- get_object_type(os$ctx, link$from)
   source_tbl <- build_object_tbl(os$ctx, source_type)
-  join <- link$join %||% list()
-  from_keys <- as_chr_vec(join$fromKeys %||% join$from_keys, "join$fromKeys")
-  to_keys   <- as_chr_vec(join$toKeys   %||% join$to_keys,   "join$toKeys")
-  if (is.null(from_keys) || is.null(to_keys)) {
-    rlang::abort(paste0("Link ", link$id, " is missing join keys."))
-  }
-  by <- stats::setNames(from_keys, to_keys)
+  keys <- ontologySpecR::link_join_keys(link)
+  by <- stats::setNames(keys$from, keys$to)
   joined <- dplyr::inner_join(os$tbl, source_tbl, by = by, suffix = c(".to", ".from"), keep = TRUE)
-  source_props <- property_ids(source_type)
+  source_props <- ontologySpecR::object_property_ids(source_type)
   selections <- resolve_target_columns(joined, source_props, suffix = ".from")
   tbl <- dplyr::select(joined, !!!selections)
   os_new(os$ctx, source_type$id, tbl, source_props)
@@ -454,7 +270,7 @@ os_count <- function(os) {
 os_aggregate <- function(os, ..., .by = NULL) {
   ensure_object_set(os)
   
-  object_type <- get_object_type(os$ctx, os$object_type_id)
+  object_type <- os_type_def(os)
   
   # Capture everything
   dots <- rlang::enquos(...)
@@ -513,6 +329,15 @@ os_show_query <- function(os) {
 
 #' Materialize a subgraph as a tidygraph graph
 #'
+#' Nodes are the rows of the requested object types, keyed
+#' \code{"<ObjectType>::<primary key>"} so identical key values on different
+#' types stay distinct. Each link type contributes one edge per joined row,
+#' running from the source object (\code{link$from}) to the target object
+#' (\code{link$to}), both identified by their primary keys.
+#'
+#' Edges whose source or target type is not in \code{object_type_ids} are
+#' dropped, with one warning per link naming how many.
+#'
 #' @param ctx An \code{OntologyContext}.
 #' @param object_type_ids Character vector of object type identifiers.
 #' @param link_type_ids Character vector of link type identifiers.
@@ -526,49 +351,67 @@ os_to_graph <- function(ctx, object_type_ids, link_type_ids) {
   node_frames <- list()
   for (object_type_id in object_type_ids) {
     object_type <- get_object_type(ctx, object_type_id)
-    pk <- object_primary_key(object_type)
-    pk_cols <- pk
-    tbl <- build_object_tbl(ctx, object_type)
-    nodes <- dplyr::select(tbl, dplyr::all_of(pk_cols))
+    pk_cols <- ontologySpecR::object_pk(object_type)
+    nodes <- dplyr::select(build_object_tbl(ctx, object_type), dplyr::all_of(pk_cols))
     nodes <- dplyr::collect(nodes)
-    key <- compose_node_key(nodes)
     node_frames[[object_type_id]] <- dplyr::mutate(
       nodes,
       .object_type = object_type_id,
-      .node_key = key
+      .node_key = graph_node_key(object_type_id, nodes[pk_cols])
     )
   }
   nodes_df <- dplyr::bind_rows(node_frames)
   node_index <- stats::setNames(seq_len(nrow(nodes_df)), nodes_df$.node_key)
+
   edge_frames <- list()
   for (link_type_id in link_type_ids) {
     link <- get_link_type(ctx, link_type_id)
-    from_type <- get_object_type(ctx, link$from)
-    to_type <- get_object_type(ctx, link$to)
-    join <- link$join %||% list()
-    from_keys <- as_chr_vec(join$fromKeys %||% join$from_keys, "join$fromKeys")
-    to_keys   <- as_chr_vec(join$toKeys   %||% join$to_keys,   "join$toKeys")
-    if (is.null(from_keys) || is.null(to_keys)) {
-      rlang::abort(paste0("Link ", link$id, " is missing join keys."))
+    ends <- ontologySpecR::link_endpoints(link)
+    from_type <- get_object_type(ctx, ends$from)
+    to_type <- get_object_type(ctx, ends$to)
+    keys <- ontologySpecR::link_join_keys(link)
+    validate_property_ids(from_type, keys$from)
+    validate_property_ids(to_type, keys$to)
+    from_pk <- ontologySpecR::object_pk(from_type)
+    to_pk <- ontologySpecR::object_pk(to_type)
+
+    # Prefix every selected column by side (.f_ / .t_) so the two tables can
+    # never clash, whatever the join columns are called.
+    side_select <- function(object_type, cols, prefix) {
+      cols <- unique(cols)
+      dplyr::select(
+        build_object_tbl(ctx, object_type),
+        dplyr::all_of(stats::setNames(cols, paste0(prefix, cols)))
+      )
     }
-    from_tbl <- build_object_tbl(ctx, from_type)
-    to_tbl <- build_object_tbl(ctx, to_type)
-    by <- stats::setNames(to_keys, from_keys)
     joined <- dplyr::inner_join(
-      dplyr::select(from_tbl, dplyr::all_of(from_keys)),
-      dplyr::select(to_tbl, dplyr::all_of(to_keys)),
-      by = by,
+      side_select(from_type, c(from_pk, keys$from), ".f_"),
+      side_select(to_type, c(to_pk, keys$to), ".t_"),
+      by = stats::setNames(paste0(".t_", keys$to), paste0(".f_", keys$from)),
       keep = TRUE
     )
     edge_df <- dplyr::collect(joined)
-    from_key <- compose_node_key(edge_df[from_keys])
-    to_key <- compose_node_key(edge_df[to_keys])
-    edge_frames[[link_type_id]] <- data.frame(
-      from = node_index[from_key],
-      to = node_index[to_key],
-      link_type = link_type_id,
+
+    # Endpoints are the objects themselves (their primary keys), not the join
+    # column values.
+    from_key <- graph_node_key(ends$from, edge_df[paste0(".f_", from_pk)])
+    to_key <- graph_node_key(ends$to, edge_df[paste0(".t_", to_pk)])
+    edges <- data.frame(
+      from = unname(node_index[from_key]),
+      to = unname(node_index[to_key]),
+      link_type = rep(link_type_id, length(from_key)),
       stringsAsFactors = FALSE
     )
+    dangling <- is.na(edges$from) | is.na(edges$to)
+    if (any(dangling)) {
+      rlang::warn(sprintf(
+        "Link '%s': dropped %d edge%s whose endpoint type (%s -> %s) is not in `object_type_ids`.",
+        link_type_id, sum(dangling), if (sum(dangling) == 1) "" else "s",
+        ends$from, ends$to
+      ))
+      edges <- edges[!dangling, , drop = FALSE]
+    }
+    edge_frames[[link_type_id]] <- edges
   }
   edges_df <- dplyr::bind_rows(edge_frames)
   tidygraph::tbl_graph(nodes = nodes_df, edges = edges_df, directed = TRUE)

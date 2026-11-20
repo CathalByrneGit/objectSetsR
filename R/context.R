@@ -1,42 +1,7 @@
-bundle_as_list <- function(bundle) {
-  if (inherits(bundle, "ontology_bundle")) {
-    return(ontologySpecR::as_list(bundle))
-  }
-  # Raw list with either naming convention
-  if (is.list(bundle)) {
-    return(bundle)
-  }
-  rlang::abort("`bundle` must be a list or ontologySpecR bundle.")
-}
-
-index_by_id <- function(items) {
-  stats::setNames(items, vapply(items, `[[`, character(1), "id"))
-}
-
-get_object_types <- function(bundle_list) {
-  obj_types <- bundle_list$objects %||% bundle_list$objectTypes %||%
-    bundle_list$object_types
-  if (is.null(obj_types)) {
-    rlang::abort("Bundle is missing object types.")
-  }
-  index_by_id(obj_types)
-}
-
-get_link_types <- function(bundle_list) {
-  link_types <- bundle_list$links %||% bundle_list$linkTypes %||%
-    bundle_list$link_types
-  if (is.null(link_types)) {
-    rlang::abort("Bundle is missing link types.")
-  }
-  index_by_id(link_types)
-}
-
-get_interface_types <- function(bundle_list) {
-  ifaces <- bundle_list$interfaces %||% bundle_list$interfaceTypes %||%
-    bundle_list$interface_types
-  if (is.null(ifaces)) return(list())
-  index_by_id(ifaces)
-}
+# The bundle layout (key spellings, primary-key structure, source bindings) is
+# owned by ontologySpecR. Everything in this file reads bundles through its
+# accessors. `ctx$spec` is the normalised `ontology_bundle` produced by
+# `ontologySpecR::as_bundle()`; `ctx$bundle` keeps whatever the caller passed.
 
 get_interface <- function(ctx, interface_id) {
   iface <- ctx$interface_types[[interface_id]]
@@ -47,21 +12,17 @@ get_interface <- function(ctx, interface_id) {
 }
 
 interface_property_ids <- function(interface_type) {
-  props <- interface_type$properties %||% interface_type$propertys %||%
-    interface_type$props
-  if (is.null(props) || length(props) == 0) {
-    rlang::abort(paste0("Interface ", interface_type$id, " has no properties."))
+  reqs <- interface_type$requiredProperties
+  if (length(reqs) == 0) {
+    rlang::abort(paste0("Interface ", interface_type$id, " has no required properties."))
   }
-  vapply(props, `[[`, character(1), "id")
+  vapply(reqs, `[[`, character(1), "id")
 }
 
 find_implementing_types <- function(ctx, interface_id) {
   matches <- character(0)
   for (obj in ctx$object_types) {
-    impls <- obj$implements %||% obj$interfaces
-    if (is.null(impls)) next
-    if (is.list(impls)) impls <- unlist(impls, use.names = FALSE)
-    if (interface_id %in% impls) {
+    if (interface_id %in% unlist(obj$implements, use.names = FALSE)) {
       matches <- c(matches, obj$id)
     }
   }
@@ -84,53 +45,48 @@ get_link_type <- function(ctx, link_type_id) {
   link
 }
 
-object_properties <- function(object_type) {
-  props <- object_type$properties %||% object_type$propertys %||% object_type$props
-  if (is.null(props)) {
-    rlang::abort(paste0("Object type ", object_type$id, " has no properties."))
+# The type an ObjectSet is "of", for validating expressions against its
+# properties. Normally an object type; sets built by object_set_by_interface()
+# are of the interface, so they validate against its required properties.
+os_type_def <- function(os) {
+  id <- os$object_type_id
+  obj <- os$ctx$object_types[[id]]
+  if (!is.null(obj)) {
+    return(obj)
   }
-  props
+  iface <- os$ctx$interface_types[[id]]
+  if (!is.null(iface)) {
+    return(list(
+      id = id,
+      properties = lapply(iface$requiredProperties, function(r) list(id = r$id, type = r$type))
+    ))
+  }
+  rlang::abort(paste0("Unknown object type: ", id))
 }
 
-object_primary_key <- function(object_type) {
-  pk <- object_type$primaryKey %||% object_type$primary_key %||% object_type$primary_key_id
-  if (is.null(pk)) {
-    rlang::abort(paste0("Object type ", object_type$id, " has no primary key."))
-  }
-  # ontologySpecR produces list(properties = list("col"), strategy = "natural")
-  if (is.list(pk) && !is.null(pk$properties)) {
-    return(as.character(pk$properties))
-  }
-  # plain string or character vector
-  as.character(pk)
-}
-
-object_source_table <- function(object_type) {
-  source <- object_type$source
-  if (is.null(source)) {
+# Where an object type's rows live: a (possibly schema-qualified) table, or the
+# defining SQL for query-backed types.
+object_backing <- function(object_type) {
+  src <- ontologySpecR::object_source(object_type)
+  if (is.null(src)) {
     rlang::abort(paste0("Object type ", object_type$id, " has no source binding."))
   }
-  table <- source$table %||% source$name %||% source$id %||% object_type$id
-  schema <- source$schema
-  if (!is.null(schema)) {
-    return(DBI::Id(schema = schema, table = table))
+  if (identical(src$kind, "query")) {
+    sql <- ontologySpecR::object_source_sql(object_type)
+    if (is.null(sql)) {
+      rlang::abort(paste0("Object type ", object_type$id, " is query-backed but has no source SQL."))
+    }
+    return(list(kind = "query", sql = sql))
   }
-  table
-}
-
-property_source_expr <- function(property) {
-  source <- property$source %||% list()
-  column <- source$column %||% source$name %||% property$id
-  expression <- source$expression
-  list(column = column, expression = expression)
-}
-
-property_ids <- function(object_type) {
-  vapply(object_properties(object_type), `[[`, character(1), "id")
+  table <- ontologySpecR::object_table(object_type)
+  if (!is.null(src$schema)) {
+    table <- DBI::Id(schema = src$schema, table = table)
+  }
+  list(kind = "table", table = table)
 }
 
 validate_property_ids <- function(object_type, symbols) {
-  props <- property_ids(object_type)
+  props <- ontologySpecR::object_property_ids(object_type)
   missing <- setdiff(symbols, props)
   if (length(missing) > 0) {
     rlang::abort(
@@ -143,6 +99,7 @@ validate_property_ids <- function(object_type, symbols) {
 }
 
 #' Extract symbol names from a filter expression (safe for validation)
+#' @noRd
 symbols_in_expr <- function(expr) {
   # Symbols like stops, distance, etc.
   if (rlang::is_symbol(expr)) {
@@ -174,6 +131,7 @@ symbols_in_expr <- function(expr) {
 }
 
 #' Validate that filter expressions only refer to known properties
+#' @noRd
 validate_filter_exprs <- function(object_type, quos) {
   # `quos` is a list of quosures (from enquos)
   symbols <- unique(unlist(
@@ -232,8 +190,9 @@ validate_summary_exprs <- function(object_type, summary_quos) {
 context_validate_tables <- function(ctx) {
   con <- ctx$connection
   for (obj in ctx$object_types) {
-    table <- object_source_table(obj)
-    if (!DBI::dbExistsTable(con, table)) {
+    backing <- object_backing(obj)
+    # Query-backed types have no table to look up.
+    if (backing$kind == "table" && !DBI::dbExistsTable(con, backing$table)) {
       rlang::abort(
         paste0("Missing backing table for object type ", obj$id, ".")
       )
@@ -244,9 +203,10 @@ context_validate_tables <- function(ctx) {
 
 #' Check that an object type satisfies an interface
 #'
-#' @param object_type An object type (list with id, properties, etc.).
-#' @param interface An interface type (list with id, properties/requiredProperties).
-#' @param bundle Optional bundle for link/action validation.
+#' @param object_type An \code{ontology_object_type}.
+#' @param interface An \code{ontology_interface_type}.
+#' @param bundle Optional \code{ontology_bundle} (as returned by
+#'   \code{ontologySpecR::as_bundle()}) for link/action validation.
 #' @param error Logical. If TRUE (default), abort on first violation.
 #'   If FALSE, return a character vector of violation messages.
 #' @return TRUE invisibly on success, or character vector of violations.
@@ -256,17 +216,12 @@ check_implements <- function(object_type, interface, bundle = NULL, error = TRUE
   ot_id <- object_type$id
   iface_id <- interface$id
 
+  # Object type property ids and their definitions
+  ot_props_by_id <- ontologySpecR::object_properties(object_type)
+  ot_prop_ids <- names(ot_props_by_id)
 
-  # Get object type property IDs and their definitions
-
-  ot_props <- object_properties(object_type)
-  ot_prop_ids <- vapply(ot_props, `[[`, character(1), "id")
-  ot_props_by_id <- stats::setNames(ot_props, ot_prop_ids)
-
-  # Get required properties from interface
-
-  req_props <- interface$requiredProperties %||% interface$required_properties %||%
-    interface$properties
+  # Required properties from the interface
+  req_props <- interface$requiredProperties
   if (!is.null(req_props)) {
     for (req in req_props) {
       req_id <- req$id
@@ -304,14 +259,12 @@ check_implements <- function(object_type, interface, bundle = NULL, error = TRUE
 
   # Check required links (only if bundle provided)
   if (!is.null(bundle)) {
-    bundle_list <- bundle_as_list(bundle)
-    link_types <- get_link_types(bundle_list)
-    link_ids <- names(link_types)
+    link_ids <- names(ontologySpecR::bundle_link_types(bundle))
 
-    req_links <- interface$requiredLinks %||% interface$required_links
+    req_links <- interface$requiredLinks
     if (!is.null(req_links)) {
       for (req_link in req_links) {
-        link_id <- req_link$linkTypeId %||% req_link$link_type_id %||% req_link$id
+        link_id <- req_link$linkTypeId
         if (!(link_id %in% link_ids)) {
           violations <- c(violations, sprintf(
             "[%s] missing required link type '%s'",
@@ -322,18 +275,11 @@ check_implements <- function(object_type, interface, bundle = NULL, error = TRUE
     }
 
     # Check required actions
-    req_actions <- interface$requiredActions %||% interface$required_actions
+    req_actions <- unlist(interface$requiredActions, use.names = FALSE)
     if (!is.null(req_actions)) {
-      action_types <- bundle_list$actions %||% bundle_list$actionTypes %||%
-        bundle_list$action_types
-      action_ids <- if (!is.null(action_types)) {
-        vapply(action_types, `[[`, character(1), "id")
-      } else {
-        character(0)
-      }
+      action_ids <- names(ontologySpecR::bundle_action_types(bundle))
 
-      for (req_action in req_actions) {
-        action_id <- if (is.character(req_action)) req_action else req_action$id
+      for (action_id in req_actions) {
         if (!(action_id %in% action_ids)) {
           violations <- c(violations, sprintf(
             "[%s] missing required action type '%s'",
@@ -357,32 +303,21 @@ check_implements <- function(object_type, interface, bundle = NULL, error = TRUE
 
 #' Validate all interface implementations in a bundle
 #'
-#' @param bundle_list A bundle as a list (already converted via bundle_as_list).
+#' @param bundle An \code{ontology_bundle} (as returned by
+#'   \code{ontologySpecR::as_bundle()}).
 #' @param error Logical. Abort on violation (TRUE) or return violations (FALSE).
 #' @return Named list: object_type_id -> character vector of violations.
 #'   Empty list means fully valid.
 #' @keywords internal
-validate_interfaces <- function(bundle_list, error = TRUE) {
+validate_interfaces <- function(bundle, error = TRUE) {
   all_violations <- list()
 
-  ifaces <- bundle_list$interfaces %||% bundle_list$interfaceTypes %||%
-    bundle_list$interface_types
-  if (is.null(ifaces) || length(ifaces) == 0) {
-    return(all_violations)
-  }
-  ifaces_by_id <- stats::setNames(ifaces, vapply(ifaces, `[[`, character(1), "id"))
+  ifaces_by_id <- ontologySpecR::bundle_interface_types(bundle)
 
-  obj_types <- bundle_list$objects %||% bundle_list$objectTypes %||%
-    bundle_list$object_types
-  if (is.null(obj_types)) {
-    return(all_violations)
-  }
-
-  for (obj in obj_types) {
+  for (obj in ontologySpecR::bundle_object_types(bundle)) {
     ot_id <- obj$id
-    impls <- obj$implements %||% obj$interfaces
+    impls <- unlist(obj$implements, use.names = FALSE)
     if (is.null(impls)) next
-    if (is.list(impls)) impls <- unlist(impls, use.names = FALSE)
 
     obj_violations <- character(0)
     for (iface_id in impls) {
@@ -394,7 +329,7 @@ validate_interfaces <- function(bundle_list, error = TRUE) {
         next
       }
       iface <- ifaces_by_id[[iface_id]]
-      v <- check_implements(obj, iface, bundle = bundle_list, error = FALSE)
+      v <- check_implements(obj, iface, bundle = bundle, error = FALSE)
       if (is.character(v) && length(v) > 0) {
         obj_violations <- c(obj_violations, v)
       }
@@ -433,20 +368,25 @@ format_interface_violations <- function(violations) {
 
 build_object_tbl <- function(ctx, object_type) {
   con <- ctx$connection
-  table <- object_source_table(object_type)
-  base_tbl <- dplyr::tbl(con, table)
-  props <- object_properties(object_type)
-  prop_ids <- vapply(props, `[[`, character(1), "id")
+  backing <- object_backing(object_type)
+  base_tbl <- if (backing$kind == "query") {
+    dplyr::tbl(con, dbplyr::sql(backing$sql))
+  } else {
+    dplyr::tbl(con, backing$table)
+  }
+  props <- ontologySpecR::object_properties(object_type)
+  prop_ids <- names(props)
   # Only mutate properties that need renaming or computation.
   # Skip identity mappings (column == id) to avoid self-referential
   # expressions that cause infinite recursion in dbplyr.
   exprs <- list()
   for (prop in props) {
-    mapping <- property_source_expr(prop)
-    if (!is.null(mapping$expression)) {
-      exprs[[prop$id]] <- dbplyr::sql(mapping$expression)
-    } else if (mapping$column != prop$id) {
-      exprs[[prop$id]] <- rlang::sym(mapping$column)
+    expression <- ontologySpecR::property_expression(prop)
+    column <- ontologySpecR::property_column(prop)
+    if (!is.null(expression)) {
+      exprs[[prop$id]] <- dbplyr::sql(expression)
+    } else if (column != prop$id) {
+      exprs[[prop$id]] <- rlang::sym(column)
     }
   }
   if (length(exprs) > 0) {
@@ -473,7 +413,9 @@ os_new <- function(ctx, object_type_id, tbl, properties = NULL) {
 #' connection. The context validates that backing tables exist for each object
 #' type and optionally validates interface implementations.
 #'
-#' @param bundle A bundle object from \code{ontologySpecR} or a compatible list.
+#' @param bundle An \code{ontologySpecR} bundle, or anything
+#'   \code{ontologySpecR::as_bundle()} accepts (a list or a path to a JSON file).
+#'   Legacy key spellings are mapped by \code{as_bundle()}, which warns.
 #' @param connection A \code{DBI} connection.
 #' @param strict Logical. If TRUE, abort on validation failures (missing tables,
 #'   interface violations). If FALSE (default), warn on interface violations but
@@ -485,14 +427,14 @@ os_new <- function(ctx, object_type_id, tbl, properties = NULL) {
 #' @export
 ontology_context <- function(bundle, connection, strict = FALSE,
                               check_interfaces = TRUE) {
-  bundle_list <- bundle_as_list(bundle)
+  spec <- ontologySpecR::as_bundle(bundle)
   ctx <- list(
     bundle = bundle,
-    bundle_list = bundle_list,
+    spec = spec,
     connection = connection,
-    object_types = get_object_types(bundle_list),
-    link_types = get_link_types(bundle_list),
-    interface_types = get_interface_types(bundle_list)
+    object_types = ontologySpecR::bundle_object_types(spec),
+    link_types = ontologySpecR::bundle_link_types(spec),
+    interface_types = ontologySpecR::bundle_interface_types(spec)
   )
   class(ctx) <- "OntologyContext"
 
@@ -501,7 +443,7 @@ ontology_context <- function(bundle, connection, strict = FALSE,
 
   # Validate interface implementations
   if (check_interfaces) {
-    violations <- validate_interfaces(bundle_list, error = FALSE)
+    violations <- validate_interfaces(spec, error = FALSE)
     if (length(violations) > 0) {
       msg <- format_interface_violations(violations)
       if (strict) {

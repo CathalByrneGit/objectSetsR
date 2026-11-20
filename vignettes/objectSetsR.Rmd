@@ -30,44 +30,42 @@ then load sample data into an in-memory DuckDB database.
 library(objectSetsR)
 library(DBI)
 library(duckdb)
+library(ontologySpecR)
 
-bundle <- list(
-  objects = list(
-    list(
-      id = "Airport",
-      primaryKey = "airport_id",
-      source = list(table = "airports"),
-      properties = list(
-        list(id = "airport_id", type = "string"),
-        list(id = "country", type = "string"),
-        list(id = "name", type = "string")
-      )
-    ),
-    list(
-      id = "FlightRoute",
-      primaryKey = "route_id",
-      source = list(table = "routes"),
-      properties = list(
-        list(id = "route_id", type = "string"),
-        list(id = "origin_id", type = "string"),
-        list(id = "destination_id", type = "string"),
-        list(id = "stops", type = "integer")
-      )
-    )
+airport <- object_type(
+  id = "Airport",
+  properties = list(
+    property_def("airport_id", "string", nullable = FALSE),
+    property_def("country", "string"),
+    property_def("name", "string")
   ),
+  primary_key = "airport_id",
+  source_kind = "table",
+  source_table = "airports"
+)
+
+flight_route <- object_type(
+  id = "FlightRoute",
+  properties = list(
+    property_def("route_id", "string", nullable = FALSE),
+    property_def("origin_id", "string"),
+    property_def("destination_id", "string"),
+    property_def("stops", "integer")
+  ),
+  primary_key = "route_id",
+  source_kind = "table",
+  source_table = "routes"
+)
+
+bundle <- bundle(
+  bundle_id = "aviation-vignette",
+  bundle_version = "0.1.0",
+  objects = list(airport, flight_route),
   links = list(
-    list(
-      id = "RouteOrigin",
-      from = "FlightRoute",
-      to = "Airport",
-      join = list(fromKeys = "origin_id", toKeys = "airport_id")
-    ),
-    list(
-      id = "RouteDestination",
-      from = "FlightRoute",
-      to = "Airport",
-      join = list(fromKeys = "destination_id", toKeys = "airport_id")
-    )
+    link_type("RouteOrigin", from = "FlightRoute", to = "Airport",
+              join_from_keys = "origin_id", join_to_keys = "airport_id"),
+    link_type("RouteDestination", from = "FlightRoute", to = "Airport",
+              join_from_keys = "destination_id", join_to_keys = "airport_id")
   )
 )
 
@@ -173,48 +171,52 @@ object_set(ctx, "FlightRoute") |>
 
 # Interface-aware queries
 
-Bundles can define interfaces — shared property contracts that multiple object
-types implement. Use `object_set_by_interface()` to query across all
+Bundles can define interfaces — shared property contracts (`required_properties`)
+that multiple object types implement (`implements = "Named"`). Use `object_set_by_interface()` to query across all
 implementing types at once.
 
 ```{r interface-setup}
-# Create a bundle with an interface
-interface_bundle <- list(
-  objects = list(
-    list(
-      id = "Airport",
-      primaryKey = "airport_id",
-      source = list(table = "airports"),
-      implements = list("Named"),
-      properties = list(
-        list(id = "airport_id", type = "string"),
-        list(id = "country", type = "string"),
-        list(id = "name", type = "string")
-      )
-    ),
-    list(
-      id = "FlightRoute",
-      primaryKey = "route_id",
-      source = list(table = "routes"),
-      implements = list("Named"),
-      properties = list(
-        list(id = "route_id", type = "string"),
-        list(id = "origin_id", type = "string"),
-        list(id = "destination_id", type = "string"),
-        list(id = "stops", type = "integer"),
-        list(id = "name", type = "string", source = list(column = "route_id"))
-      )
-    )
+# An interface is a shape contract: the properties implementing types must
+# provide. Airport implements "Named" directly; FlightRoute satisfies it by
+# mapping its `route_id` column to a `name` property.
+named <- interface_type(
+  "Named",
+  required_properties = list(property_requirement("name", "string"))
+)
+
+named_airport <- object_type(
+  id = "Airport",
+  properties = list(
+    property_def("airport_id", "string", nullable = FALSE),
+    property_def("country", "string"),
+    property_def("name", "string")
   ),
-  links = list(),
-  interfaces = list(
-    list(
-      id = "Named",
-      properties = list(
-        list(id = "name", type = "string")
-      )
-    )
-  )
+  primary_key = "airport_id",
+  implements = "Named",
+  source_kind = "table",
+  source_table = "airports"
+)
+
+named_route <- object_type(
+  id = "FlightRoute",
+  properties = list(
+    property_def("route_id", "string", nullable = FALSE),
+    property_def("origin_id", "string"),
+    property_def("destination_id", "string"),
+    property_def("stops", "integer"),
+    property_def("name", "string", source_column = "route_id")
+  ),
+  primary_key = "route_id",
+  implements = "Named",
+  source_kind = "table",
+  source_table = "routes"
+)
+
+interface_bundle <- bundle(
+  bundle_id = "aviation-interfaces",
+  bundle_version = "0.1.0",
+  objects = list(named_airport, named_route),
+  interfaces = list(named)
 )
 
 ctx_iface <- ontology_context(interface_bundle, con)

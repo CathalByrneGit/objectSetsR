@@ -1,7 +1,7 @@
 Package: objectSetsR
 Type: Package
 Title: Lazy Ontology-Aware Object Sets
-Version: 0.1.0
+Version: 0.2.1
 Authors@R: c(
     person("ObjectSetsR", "Maintainer", email = "maintainer@example.com", role = c("aut", "cre"))
   )
@@ -12,7 +12,7 @@ License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
 Imports:
-    ontologySpecR,
+    ontologySpecR (>= 0.2.1),
     DBI,
     dplyr,
     dbplyr,
@@ -20,11 +20,10 @@ Imports:
 Suggests:
     duckdb,
     tidygraph,
-    vertexR,
-    RSQLite,
     testthat (>= 3.0.0),
     knitr,
     rmarkdown
+Remotes: CathalByrneGit/ontologySpecR
 Config/testthat/edition: 3
 Roxygen: list(markdown = TRUE)
 VignetteBuilder: knitr

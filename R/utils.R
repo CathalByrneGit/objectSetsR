@@ -52,10 +52,18 @@ resolve_target_columns <- function(joined_tbl, target_props, suffix = ".to") {
   rlang::set_names(rlang::syms(source_names), target_props)
 }
 
+# One string key per row. A single column becomes as.character(); several
+# columns are joined with "|". Done column by column: going through
+# as.matrix()/apply() would pad numbers to a common width ("1" vs "10").
 compose_node_key <- function(values) {
-  if (is.null(dim(values))) {
-    as.character(values)
-  } else {
-    apply(values, 1, function(row) paste(row, collapse = "|"))
+  if (!is.list(values)) {
+    return(as.character(values))
   }
+  do.call(paste, c(lapply(unname(as.list(values)), as.character), list(sep = "|")))
+}
+
+# Graph node keys are namespaced by object type, so Airport 1 and FlightRoute 1
+# are distinct nodes.
+graph_node_key <- function(object_type_id, pk_values) {
+  paste0(object_type_id, "::", compose_node_key(pk_values))
 }

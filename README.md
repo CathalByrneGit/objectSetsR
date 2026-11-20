@@ -47,6 +47,14 @@ object_set(ctx, "FlightRoute") |>
   os_show_query()
 ```
 
+## Bundles
+
+Bundles are read through `ontologySpecR` (`as_bundle()` and its accessors);
+objectSetsR keeps no copy of the bundle layout. Build bundles with the
+`ontologySpecR` constructors or load them with `read_bundle()`. Raw lists with
+legacy keys (`objectTypes`, `table_name`, ...) are still accepted but
+`as_bundle()` warns.
+
 ## Core operations
 
 | Function | Description |
@@ -74,19 +82,35 @@ Bundles can define interfaces that multiple object types implement. Use
 `object_set_by_interface()` to query across all implementing types:
         
 ```r
-# Bundle with interfaces
-bundle <- list(
+library(ontologySpecR)
+
+geo <- interface_type(
+  "GeoLocated",
+  required_properties = list(
+    property_requirement("latitude", "number"),
+    property_requirement("longitude", "number")
+  )
+)
+
+# Object types opt in with `implements`; ontology_context() checks that each one
+# actually provides the required properties (warning, or an error if
+# `strict = TRUE`; skip with `check_interfaces = FALSE`).
+bundle <- bundle(
+  bundle_id = "geo-demo",
+  bundle_version = "0.1.0",
   objects = list(
-    list(id = "Airport", implements = list("GeoLocated"), ...),
-    list(id = "City", implements = list("GeoLocated"), ...)
+    object_type("Airport", implements = "GeoLocated", primary_key = "airport_id",
+                properties = list(property_def("airport_id", "string", nullable = FALSE),
+                                  property_def("latitude", "number"),
+                                  property_def("longitude", "number")),
+                source_kind = "table", source_table = "airports"),
+    object_type("City", implements = "GeoLocated", primary_key = "city_id",
+                properties = list(property_def("city_id", "string", nullable = FALSE),
+                                  property_def("latitude", "number"),
+                                  property_def("longitude", "number")),
+                source_kind = "table", source_table = "cities")
   ),
-  interfaces = list(
-    list(id = "GeoLocated", properties = list(
-      list(id = "latitude", type = "float"),
-      list(id = "longitude", type = "float")
-    ))
-  ),
-  links = list(...)
+  interfaces = list(geo)
 )
 
 ctx <- ontology_context(bundle, con)
@@ -97,7 +121,7 @@ all_locations <- object_set_by_interface(ctx, "GeoLocated") |>
   os_collect()
 ```
 
-The result contains only the interface properties (`latitude`, `longitude`),
+The result contains only the interface's required properties (`latitude`, `longitude`),
 projected from all implementing types and unioned together.
 
 ## Graph materialization
