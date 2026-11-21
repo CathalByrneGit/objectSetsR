@@ -131,6 +131,24 @@ routes_from_dublin <- object_set(ctx, "Airport") |>
 routes_from_dublin
 ```
 
+# Multi-hop traversal
+
+`os_traverse()` and `os_search_around()` are single SQL joins and work on any
+DBI backend. To follow a link over several hops, `os_traverse_deep()` runs the
+traversal inside DuckDB using the DuckPGQ extension, through the optional
+`vertexR` package. It returns every reachable object of the destination type
+within the hop range. It needs a DuckDB connection, DuckPGQ and single-column
+primary keys, so the chunk below is not evaluated here.
+
+```{r traverse-deep, eval=FALSE}
+object_set(ctx, "FlightRoute") |>
+  os_filter(stops == 0L) |>
+  os_traverse_deep("RouteOrigin", min_hops = 1, max_hops = 3)
+```
+
+If the bundle's property graph does not exist yet it is created with
+`vertexR::vx_pgq_setup()` and a message says so.
+
 # Set algebra
 
 ```{r set-algebra}
@@ -159,6 +177,23 @@ object_set(ctx, "FlightRoute") |>
   os_arrange(name) |>
   os_collect()
 ```
+
+# Graphs
+
+`os_to_graph()` materializes object types and links as a `tidygraph` graph.
+Nodes are keyed `"<ObjectType>::<primary key>"`, so equal key values on
+different types stay distinct. Each link contributes an edge from the link's
+source object to its target object, identified by their primary keys.
+
+```{r graph, eval=requireNamespace("tidygraph", quietly = TRUE)}
+g <- os_to_graph(ctx, c("Airport", "FlightRoute"), "RouteOrigin")
+nodes <- tidygraph::as_tibble(g, active = "nodes")
+edges <- tidygraph::as_tibble(g, active = "edges")
+data.frame(from = nodes$.node_key[edges$from], to = nodes$.node_key[edges$to])
+```
+
+An edge whose source or target type is not among the requested object types is
+dropped, with one warning per link.
 
 # Viewing the generated SQL
 
@@ -222,6 +257,11 @@ interface_bundle <- bundle(
 ctx_iface <- ontology_context(interface_bundle, con)
 ctx_iface
 ```
+
+`ontology_context()` checks that every type declaring `implements` really
+provides the interface's required properties (and links and actions). Violations
+produce a warning, or an error with `strict = TRUE`; pass
+`check_interfaces = FALSE` to skip the check.
 
 ```{r interface-query}
 # Query all Named objects (airports + routes)

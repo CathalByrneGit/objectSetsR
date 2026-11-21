@@ -24,6 +24,9 @@ b <- read_bundle(system.file("examples", "aviation-demo.json",
                              package = "ontologySpecR"))
 
 con <- DBI::dbConnect(duckdb::duckdb())
+# The demo binds Airport to table `airports` in schema `public`, and Airline /
+# FlightRoute to `airlines` / `routes`. Create them before building the context:
+DBI::dbExecute(con, "CREATE SCHEMA IF NOT EXISTS public")
 # ...insert sample airport/airline/route data here...
 
 ctx <- ontology_context(b, con)
@@ -43,7 +46,6 @@ airport_counts <- object_set(ctx, "FlightRoute") |>
 object_set(ctx, "FlightRoute") |>
   os_traverse("RouteOrigin") |>
   os_filter(country == "Ireland") |>
-
   os_show_query()
 ```
 
@@ -71,7 +73,7 @@ legacy keys (`objectTypes`, `table_name`, ...) are still accepted but
 | `os_intersect(os1, os2)` | Set intersection |
 | `os_distinct(os)` | Remove duplicate rows |
 | `os_arrange(os, ...)` | Sort results |
-| `os_aggregate(os, ..., named_summaries)` | Group and summarize |
+| `os_aggregate(os, <groups>, name = <summary>)` | Group (unnamed) and summarize (named) |
 | `os_count(os)` | Count rows |
 | `os_collect(os)` | Materialize to data frame |
 | `os_show_query(os)` | Render SQL string |
@@ -156,6 +158,13 @@ g <- os_to_graph(ctx,
 
 # Now use tidygraph/ggraph for analysis and visualization
 ```
+
+Nodes are the rows of the requested object types, keyed
+`"<ObjectType>::<primary key>"` (in `.node_key`), so an Airport `1` and a
+FlightRoute `1` are different nodes. Each link type adds one edge per joined row,
+running from the link's source object to its target object (e.g. route ->
+airport), identified by their primary keys. Edges whose source or target type
+isn't in `object_type_ids` are dropped, with one warning per link.
 
 ## Related packages
 
