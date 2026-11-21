@@ -332,6 +332,66 @@ os_arrange <- function(os, ...) {
   os_new(os$ctx, os$object_type_id, tbl, os$properties)
 }
 
+#' Take a stable page of an object set
+#'
+#' Returns rows \code{offset + 1} to \code{offset + n} of an object set. The
+#' result stays lazy: paging runs in the database, by numbering rows with a
+#' \code{row_number()} window and filtering on it (dbplyr has no direct
+#' \code{OFFSET}).
+#'
+#' Pages must be stable, so rows are numbered in a fixed order: the set's own
+#' order if it was sorted with \code{os_arrange()}, otherwise the object type's
+#' primary key. If the set has lost its primary-key columns (for example after
+#' \code{os_select()} or \code{os_aggregate()}), all of its columns are used.
+#'
+#' @param os An \code{ObjectSet}.
+#' @param offset Non-negative integer. Number of rows to skip. Default 0.
+#' @param n Non-negative integer. Maximum number of rows to return.
+#'
+#' @return An \code{ObjectSet}, sorted in the paging order.
+#' @export
+os_slice <- function(os, offset = 0L, n) {
+  ensure_object_set(os)
+  offset <- check_count_arg(offset, "offset")
+  n <- check_count_arg(n, "n")
+
+  order_quos <- slice_order(os)
+  tbl <- dbplyr::window_order(os$tbl, !!!order_quos)
+  tbl <- dplyr::mutate(tbl, .os_row = dplyr::row_number())
+  lo <- offset
+  hi <- offset + n
+  row <- rlang::sym(".os_row")
+  tbl <- dplyr::filter(tbl, !!row > !!lo, !!row <= !!hi)
+  tbl <- dplyr::arrange(tbl, !!row)
+  tbl <- dplyr::select(tbl, -".os_row")
+  os_new(os$ctx, os$object_type_id, tbl, os$properties)
+}
+
+# The order os_slice() numbers rows in: an existing os_arrange() order, else the
+# primary key, else every column.
+slice_order <- function(os) {
+  existing <- dbplyr::op_sort(os$tbl)
+  if (length(existing) > 0) {
+    return(existing)
+  }
+  vars <- dplyr::tbl_vars(os$tbl)
+  obj <- os$ctx$object_types[[os$object_type_id]]
+  pk <- if (!is.null(obj)) {
+    tryCatch(ontologySpecR::object_pk(obj), error = function(e) character(0))
+  } else {
+    character(0)
+  }
+  cols <- if (length(pk) > 0 && all(pk %in% vars)) pk else vars
+  rlang::syms(cols)
+}
+
+check_count_arg <- function(x, arg) {
+  if (length(x) != 1L || is.na(x) || !is.numeric(x) || x < 0 || x != trunc(x)) {
+    rlang::abort(paste0("`", arg, "` must be a single non-negative integer."))
+  }
+  as.integer(x)
+}
+
 #' Union two object sets
 #'
 #' @param os1 An \code{ObjectSet}.
