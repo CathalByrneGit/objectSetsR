@@ -718,3 +718,83 @@ test_that("interface validation checks required links and actions", {
   expect_match(msg, "missing required link type 'NoSuchLink'", fixed = TRUE)
   expect_match(msg, "missing required action type 'NoSuchAction'", fixed = TRUE)
 })
+
+# ---- os_slice ----
+
+setup_slice_db <- function() {
+  con <- DBI::dbConnect(duckdb::duckdb())
+  # Inserted out of key order, so a page that ignored ordering would show it.
+  DBI::dbWriteTable(con, "airports", data.frame(
+    airport_id = c("E", "B", "D", "A", "C"),
+    country = c("IE", "UK", "IE", "FR", "UK"),
+    name = c("e", "b", "d", "a", "c"),
+    stringsAsFactors = FALSE
+  ))
+  DBI::dbWriteTable(con, "routes", data.frame(
+    route_id = character(0), origin_id = character(0),
+    destination_id = character(0), stops = integer(0),
+    stringsAsFactors = FALSE
+  ))
+  con
+}
+
+test_that("os_slice returns the first page ordered by primary key", {
+  con <- setup_slice_db()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  ctx <- ontology_context(make_bundle(), con)
+  page <- os_slice(object_set(ctx, "Airport"), offset = 0L, n = 2L)
+  expect_s3_class(page, "ObjectSet")
+  expect_equal(os_collect(page)$airport_id, c("A", "B"))
+})
+
+test_that("os_slice returns a middle page", {
+  con <- setup_slice_db()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  ctx <- ontology_context(make_bundle(), con)
+  page <- os_slice(object_set(ctx, "Airport"), offset = 2L, n = 2L)
+  expect_equal(os_collect(page)$airport_id, c("C", "D"))
+})
+
+test_that("os_slice returns a short last page", {
+  con <- setup_slice_db()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  ctx <- ontology_context(make_bundle(), con)
+  page <- os_slice(object_set(ctx, "Airport"), offset = 4L, n = 2L)
+  expect_equal(os_collect(page)$airport_id, "E")
+})
+
+test_that("os_slice past the end returns an empty page", {
+  con <- setup_slice_db()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  ctx <- ontology_context(make_bundle(), con)
+  page <- os_slice(object_set(ctx, "Airport"), offset = 10L, n = 2L)
+  out <- os_collect(page)
+  expect_equal(nrow(out), 0L)
+  expect_named(out, c("airport_id", "country", "name"))
+  expect_equal(nrow(os_collect(os_slice(object_set(ctx, "Airport"), n = 0L))), 0L)
+})
+
+test_that("os_slice keeps an existing os_arrange order", {
+  con <- setup_slice_db()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  ctx <- ontology_context(make_bundle(), con)
+  os <- os_arrange(object_set(ctx, "Airport"), dplyr::desc(airport_id))
+  # dbplyr notes that the inner ORDER BY is dropped: the row_number() window
+  # carries the order instead, which is what these expectations check.
+  quiet <- function(x) suppressWarnings(os_collect(x))
+  expect_equal(quiet(os_slice(os, 0L, 2L))$airport_id, c("E", "D"))
+  expect_equal(quiet(os_slice(os, 2L, 2L))$airport_id, c("C", "B"))
+})
+
+test_that("os_slice composes with filters, stays lazy, and validates args", {
+  con <- setup_slice_db()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  ctx <- ontology_context(make_bundle(), con)
+  os <- os_filter(object_set(ctx, "Airport"), country == "UK")
+  page <- os_slice(os, offset = 1L, n = 5L)
+  expect_match(os_show_query(page), "ROW_NUMBER", ignore.case = TRUE)
+  expect_equal(os_collect(page)$airport_id, "C")
+  expect_equal(suppressWarnings(os_count(page)), 1L)
+  expect_error(os_slice(os, offset = -1L, n = 1L), "offset")
+  expect_error(os_slice(os, n = 1.5), "`n`")
+})

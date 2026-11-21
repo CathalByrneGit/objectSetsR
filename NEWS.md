@@ -1,3 +1,10 @@
+# objectSetsR 0.3.1
+
+* New `os_slice(os, offset = 0L, n)` takes a stable page of an object set. It
+  stays lazy (rows are numbered with a `row_number()` window and filtered in the
+  database, since dbplyr has no direct `OFFSET`) and orders by the set's
+  `os_arrange()` order if it has one, otherwise by the primary key.
+
 # objectSetsR 0.3.0
 
 * `os_traverse_deep()` is back, rewritten against vertexR's actual DuckPGQ API

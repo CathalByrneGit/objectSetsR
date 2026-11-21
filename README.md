@@ -73,6 +73,7 @@ legacy keys (`objectTypes`, `table_name`, ...) are still accepted but
 | `os_intersect(os1, os2)` | Set intersection |
 | `os_distinct(os)` | Remove duplicate rows |
 | `os_arrange(os, ...)` | Sort results |
+| `os_slice(os, offset, n)` | Stable, lazy page of rows (ordered by primary key unless arranged) |
 | `os_aggregate(os, <groups>, name = <summary>)` | Group (unnamed) and summarize (named) |
 | `os_count(os)` | Count rows |
 | `os_collect(os)` | Materialize to data frame |
