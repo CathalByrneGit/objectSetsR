@@ -375,6 +375,8 @@ os_count <- function(os) {
   count$n[[1]]
 }
 
+#' Aggregate an object set
+#'
 #' Summary expressions are evaluated lazily in a data-masking context,
 #' allowing the use of helpers such as \code{dplyr::n()}.
 #'
