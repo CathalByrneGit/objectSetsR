@@ -1,7 +1,7 @@
 Package: objectSetsR
 Type: Package
 Title: Lazy Ontology-Aware Object Sets
-Version: 0.3.1
+Version: 0.3.2
 Authors@R: c(
     person("ObjectSetsR", "Maintainer", email = "maintainer@example.com", role = c("aut", "cre"))
   )
@@ -12,7 +12,7 @@ License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
 Imports:
-    ontologySpecR (>= 0.2.1),
+    ontologySpecR (>= 0.2.2),
     DBI,
     dplyr,
     dbplyr,

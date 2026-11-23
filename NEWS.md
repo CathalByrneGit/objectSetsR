@@ -1,3 +1,10 @@
+# objectSetsR 0.3.2
+
+* Schema-qualified object types (`source$schema`) are now queried as
+  `dbplyr::in_schema(schema, table)`. The schema comes from
+  `ontologySpecR::object_table_id()` (ontologySpecR >= 0.2.2), so an empty
+  schema string is treated as none.
+
 # objectSetsR 0.3.1
 
 * New `os_slice(os, offset = 0L, n)` takes a stable page of an object set. It

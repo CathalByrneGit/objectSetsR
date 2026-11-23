@@ -78,11 +78,8 @@ object_backing <- function(object_type) {
     }
     return(list(kind = "query", sql = sql))
   }
-  table <- ontologySpecR::object_table(object_type)
-  if (!is.null(src$schema)) {
-    table <- DBI::Id(schema = src$schema, table = table)
-  }
-  list(kind = "table", table = table)
+  id <- ontologySpecR::object_table_id(object_type)
+  list(kind = "table", table = id$table, schema = id$schema)
 }
 
 validate_property_ids <- function(object_type, symbols) {
@@ -192,7 +189,12 @@ context_validate_tables <- function(ctx) {
   for (obj in ctx$object_types) {
     backing <- object_backing(obj)
     # Query-backed types have no table to look up.
-    if (backing$kind == "table" && !DBI::dbExistsTable(con, backing$table)) {
+    exists_name <- if (is.null(backing$schema)) {
+      backing$table
+    } else {
+      DBI::Id(schema = backing$schema, table = backing$table)
+    }
+    if (backing$kind == "table" && !DBI::dbExistsTable(con, exists_name)) {
       rlang::abort(
         paste0("Missing backing table for object type ", obj$id, ".")
       )
@@ -372,7 +374,12 @@ build_object_tbl <- function(ctx, object_type) {
   base_tbl <- if (backing$kind == "query") {
     dplyr::tbl(con, dbplyr::sql(backing$sql))
   } else {
-    dplyr::tbl(con, backing$table)
+    table <- if (is.null(backing$schema)) {
+      backing$table
+    } else {
+      dbplyr::in_schema(backing$schema, backing$table)
+    }
+    dplyr::tbl(con, table)
   }
   props <- ontologySpecR::object_properties(object_type)
   prop_ids <- names(props)
